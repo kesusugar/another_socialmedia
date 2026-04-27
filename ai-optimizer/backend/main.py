@@ -14,9 +14,18 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from db.crud import (
+    create_ad_for_campaign,
+    create_campaign,
+    delete_ad,
+    delete_campaign,
     ensure_user,
     get_ad,
+    get_ad_kpi,
+    get_ads_by_campaign,
     get_ads_by_category,
+    get_all_campaigns,
+    get_campaign,
+    get_campaign_kpi,
     get_cold_start_ads,
     get_category_impression_count,
     get_kpi,
@@ -27,6 +36,8 @@ from db.crud import (
     init_db,
     log_event,
     reset_prefs,
+    update_ad,
+    update_campaign,
     update_prefs,
     update_virtual_bid,
 )
@@ -203,6 +214,47 @@ class AgentStartRequest(BaseModel):
 
 class AgentStopRequest(BaseModel):
     agent_id: str | None = None
+
+
+class CampaignCreate(BaseModel):
+    name:         str
+    category:     str
+    daily_budget: float = Field(default=1000.0, gt=0)
+    bid_strategy: str   = Field(default="manual", pattern="^(manual|tcpa|max_delivery)$")
+    target_cpa:   float = Field(default=500.0, gt=0)
+
+
+class CampaignUpdate(BaseModel):
+    name:         str   | None = None
+    daily_budget: float | None = Field(default=None, gt=0)
+    bid_strategy: str   | None = Field(default=None, pattern="^(manual|tcpa|max_delivery)$")
+    target_cpa:   float | None = Field(default=None, gt=0)
+    status:       str   | None = Field(default=None, pattern="^(active|paused)$")
+
+
+class AdCreate(BaseModel):
+    campaign_id:  str
+    title:        str
+    category:     str
+    thumbnail:    str   = ""
+    vector_json:  str   = "[0.2,0.2,0.2,0.2,0.2]"
+    virtual_bid:  float = Field(default=1.0, ge=1.0, le=5.0)
+    cold_start:   int   = Field(default=1, ge=0, le=1)
+
+
+class AdUpdate(BaseModel):
+    title:       str   | None = None
+    thumbnail:   str   | None = None
+    virtual_bid: float | None = Field(default=None, ge=1.0, le=5.0)
+    cold_start:  int   | None = Field(default=None, ge=0, le=1)
+    vector_json: str   | None = None
+
+
+class CpaSimulateRequest(BaseModel):
+    category:     str
+    bid:          float = Field(ge=1.0, le=5.0)
+    target_cpa:   float = Field(gt=0)
+    bid_strategy: str   = Field(pattern="^(manual|tcpa|max_delivery)$")
 
 
 # ── /recommend ───────────────────────────────────────────────────────────────
@@ -500,3 +552,162 @@ def stop_agents(body: AgentStopRequest) -> dict[str, Any]:
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+# ── /advertiser/campaigns ────────────────────────────────────────────────────
+
+@app.get("/advertiser/campaigns")
+def list_campaigns() -> list[dict[str, Any]]:
+    campaigns = get_all_campaigns()
+    for cmp in campaigns:
+        ads = get_ads_by_campaign(cmp["campaign_id"])
+        cmp["ad_count"] = len(ads)
+        kpi = get_campaign_kpi(cmp["campaign_id"], minutes=1440)
+        cmp["total_impressions"] = kpi["total_impressions"]
+        cmp["overall_ctr"] = kpi["overall_ctr"]
+        cmp["overall_cpa"] = kpi["overall_cpa"]
+    return campaigns
+
+
+@app.post("/advertiser/campaigns", status_code=201)
+def create_campaign_endpoint(body: CampaignCreate) -> dict[str, Any]:
+    if body.category not in CATEGORIES:
+        raise HTTPException(status_code=400, detail=f"Unknown category: {body.category}")
+    campaign_id = create_campaign(
+        name=body.name,
+        category=body.category,
+        daily_budget=body.daily_budget,
+        bid_strategy=body.bid_strategy,
+        target_cpa=body.target_cpa,
+    )
+    return {"status": "created", "campaign_id": campaign_id}
+
+
+@app.get("/advertiser/campaigns/{campaign_id}")
+def get_campaign_endpoint(campaign_id: str) -> dict[str, Any]:
+    cmp = get_campaign(campaign_id)
+    if not cmp:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    cmp["ads"] = get_ads_by_campaign(campaign_id)
+    return cmp
+
+
+@app.put("/advertiser/campaigns/{campaign_id}")
+def update_campaign_endpoint(campaign_id: str, body: CampaignUpdate) -> dict[str, str]:
+    if not get_campaign(campaign_id):
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    updates = body.model_dump(exclude_none=True)
+    update_campaign(campaign_id, **updates)
+    return {"status": "ok"}
+
+
+@app.delete("/advertiser/campaigns/{campaign_id}")
+def delete_campaign_endpoint(campaign_id: str) -> dict[str, str]:
+    if not get_campaign(campaign_id):
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    delete_campaign(campaign_id)
+    return {"status": "deleted"}
+
+
+# ── /advertiser/campaigns/{id}/ads & kpi ─────────────────────────────────────
+
+@app.get("/advertiser/campaigns/{campaign_id}/ads")
+def list_campaign_ads(campaign_id: str) -> list[dict[str, Any]]:
+    if not get_campaign(campaign_id):
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    return get_ads_by_campaign(campaign_id)
+
+
+@app.get("/advertiser/campaigns/{campaign_id}/kpi")
+def campaign_kpi(
+    campaign_id: str,
+    minutes: int = Query(default=60, ge=1, le=1440),
+) -> dict[str, Any]:
+    if not get_campaign(campaign_id):
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    return get_campaign_kpi(campaign_id, minutes)
+
+
+# ── /advertiser/ads ───────────────────────────────────────────────────────────
+
+@app.post("/advertiser/ads", status_code=201)
+def create_ad_endpoint(body: AdCreate) -> dict[str, Any]:
+    if not get_campaign(body.campaign_id):
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    if body.category not in CATEGORIES:
+        raise HTTPException(status_code=400, detail=f"Unknown category: {body.category}")
+    ad_id = create_ad_for_campaign(
+        campaign_id=body.campaign_id,
+        title=body.title,
+        category=body.category,
+        thumbnail=body.thumbnail,
+        vector_json=body.vector_json,
+        virtual_bid=body.virtual_bid,
+        cold_start=body.cold_start,
+    )
+    return {"status": "created", "ad_id": ad_id}
+
+
+@app.put("/advertiser/ads/{ad_id}")
+def update_ad_endpoint(ad_id: str, body: AdUpdate) -> dict[str, str]:
+    if not get_ad(ad_id):
+        raise HTTPException(status_code=404, detail="Ad not found")
+    updates = body.model_dump(exclude_none=True)
+    update_ad(ad_id, **updates)
+    return {"status": "ok"}
+
+
+@app.delete("/advertiser/ads/{ad_id}")
+def delete_ad_endpoint(ad_id: str) -> dict[str, str]:
+    if not get_ad(ad_id):
+        raise HTTPException(status_code=404, detail="Ad not found")
+    delete_ad(ad_id)
+    return {"status": "deleted"}
+
+
+@app.get("/advertiser/ads/{ad_id}/kpi")
+def ad_kpi(
+    ad_id: str,
+    minutes: int = Query(default=60, ge=1, le=1440),
+) -> dict[str, Any]:
+    if not get_ad(ad_id):
+        raise HTTPException(status_code=404, detail="Ad not found")
+    return get_ad_kpi(ad_id, minutes)
+
+
+# ── /advertiser/simulate/cpa ──────────────────────────────────────────────────
+
+@app.post("/advertiser/simulate/cpa")
+def simulate_cpa(body: CpaSimulateRequest) -> dict[str, Any]:
+    if body.category not in CATEGORIES:
+        raise HTTPException(status_code=400, detail=f"Unknown category: {body.category}")
+
+    kpi_data = get_kpi(minutes=60)
+    timeline = kpi_data["timeline"]
+    if timeline:
+        avg_ctr  = sum(p["ctr"]  for p in timeline) / len(timeline)
+        avg_ecvr = sum(p["ecvr"] for p in timeline) / len(timeline)
+    else:
+        avg_ctr, avg_ecvr = 0.05, 0.02
+
+    # Higher bid boosts CTR via more impressions won in auction
+    bid_boost = 1.0 + (body.bid - 1.0) * 0.08
+    est_ctr   = min(avg_ctr * bid_boost, 1.0)
+
+    # CPA = cost per conversion; base cost proportional to bid
+    base_cpa = body.bid / (est_ctr * max(avg_ecvr, 0.01))
+    est_cpa  = base_cpa * (1.0 + _competition_level)
+
+    gap = body.target_cpa - est_cpa
+    feasible = gap >= 0
+
+    return {
+        "estimated_cpa":    round(est_cpa, 0),
+        "estimated_ctr":    round(est_ctr, 4),
+        "estimated_ecvr":   round(avg_ecvr, 4),
+        "target_cpa":       body.target_cpa,
+        "gap":              round(gap, 0),
+        "feasible":         feasible,
+        "competition_level": _competition_level,
+        "note":             "過去60分の実績ベース推定値" if timeline else "実績データなし — デフォルト値使用",
+    }
