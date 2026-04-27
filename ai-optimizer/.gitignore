@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+*.pyo
+backend/db/simulator.db
+backend/db/simulator.db-shm
+backend/db/simulator.db-wal
+node_modules/
+dist/
+.DS_Store
