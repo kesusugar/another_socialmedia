@@ -4,6 +4,7 @@ __pycache__/
 backend/db/simulator.db
 backend/db/simulator.db-shm
 backend/db/simulator.db-wal
+backend/ml_weights/
 node_modules/
 dist/
 .DS_Store
