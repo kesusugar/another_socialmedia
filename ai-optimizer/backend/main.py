@@ -30,6 +30,7 @@ from db.crud import (
     update_prefs,
     update_virtual_bid,
 )
+from agent.runner import AgentRunner
 from engine.bayesian import BayesianUpdater
 from engine.bidding import PIDController
 from engine.features import CATEGORIES
@@ -70,6 +71,7 @@ _updater = BayesianUpdater()
 _ml_store   = MLModelStore()
 _ml_trainer = ModelTrainer(_ml_store)
 _server_start: datetime = datetime.now(timezone.utc)
+_agent_runner = AgentRunner()
 
 # GRU session cache: {user_id → deque of 10-float step vectors}
 _session_lock: threading.Lock = threading.Lock()
@@ -84,6 +86,7 @@ def startup() -> None:
     _server_start = datetime.now(timezone.utc)
     init_db()
     _ml_store.load_all()
+    _agent_runner.set_base_url("http://localhost:8000")
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
@@ -191,6 +194,15 @@ class CompetitionUpdate(BaseModel):
 
 class MLStrategyUpdate(BaseModel):
     strategy: str = Field(pattern="^(bayesian|ctr_lr|mf|session_gru)$")
+
+
+class AgentStartRequest(BaseModel):
+    persona_name: str
+    count: int = Field(default=1, ge=1, le=10)
+
+
+class AgentStopRequest(BaseModel):
+    agent_id: str | None = None
 
 
 # ── /recommend ───────────────────────────────────────────────────────────────
@@ -448,6 +460,39 @@ def set_ml_strategy(body: MLStrategyUpdate) -> dict[str, str]:
 def trigger_training() -> dict[str, str]:
     threading.Thread(target=_ml_trainer._train_all, daemon=True).start()
     return {"status": "training_started"}
+
+
+# ── /admin/agents ─────────────────────────────────────────────────────────────
+
+@app.get("/admin/agents/personas")
+def get_personas() -> list[dict]:
+    return _agent_runner.available_personas()
+
+
+@app.get("/admin/agents/status")
+def get_agents_status() -> list[dict]:
+    _agent_runner.cleanup_stopped()
+    return _agent_runner.status()
+
+
+@app.post("/admin/agents/start")
+def start_agents(body: AgentStartRequest) -> dict[str, Any]:
+    try:
+        ids = _agent_runner.start(body.persona_name, body.count)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"status": "ok", "started": ids}
+
+
+@app.post("/admin/agents/stop")
+def stop_agents(body: AgentStopRequest) -> dict[str, Any]:
+    if body.agent_id:
+        ok = _agent_runner.stop(body.agent_id)
+        if not ok:
+            raise HTTPException(status_code=404, detail="Agent not found")
+        return {"status": "ok", "stopped": body.agent_id}
+    count = _agent_runner.stop_all()
+    return {"status": "ok", "stopped_count": count}
 
 
 # ── /health ───────────────────────────────────────────────────────────────────

@@ -1,3 +1,4 @@
+import { AgentPanel } from "./components/AgentPanel";
 import { AlgoPanel } from "./components/AlgoPanel";
 import { BudgetPanel } from "./components/BudgetPanel";
 import { KpiChart } from "./components/KpiChart";
@@ -10,10 +11,10 @@ export default function App() {
     <div className="min-h-screen bg-gray-950 text-gray-100">
       <header className="bg-gray-900 border-b border-gray-800 px-6 py-4">
         <h1 className="text-xl font-bold">
-          AI運用最適化シミュレーター — 管理画面 v2.0
+          AI運用最適化シミュレーター — 管理画面 v3.0
         </h1>
         <p className="text-xs text-gray-500 mt-0.5">
-          Thompson Sampling + Pacing Engine + tCPA PID制御 + CTR LR / MF / Session GRU
+          Thompson Sampling + Pacing Engine + tCPA PID制御 + CTR LR / MF / Session GRU + 仮想ユーザーエージェント
         </p>
       </header>
 
@@ -35,6 +36,9 @@ export default function App() {
 
         {/* Row 4: ML models panel */}
         <MlPanel />
+
+        {/* Row 5: Virtual user agents */}
+        <AgentPanel />
       </main>
     </div>
   );
