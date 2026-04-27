@@ -21,6 +21,24 @@ def init_db() -> None:
     schema = (Path(__file__).parent / "schema.sql").read_text()
     with get_conn() as conn:
         conn.executescript(schema)
+    _migrate_db()
+
+
+def _migrate_db() -> None:
+    """Add new columns to existing DBs without breaking fresh installs."""
+    migrations = [
+        "ALTER TABLE ads ADD COLUMN daily_budget REAL DEFAULT 1000.0",
+        "ALTER TABLE ads ADD COLUMN spent_today  REAL DEFAULT 0.0",
+        "ALTER TABLE ads ADD COLUMN bid_strategy TEXT DEFAULT 'manual'",
+        "ALTER TABLE ads ADD COLUMN target_cpa   REAL DEFAULT 500.0",
+        "ALTER TABLE user_preferences ADD COLUMN confidence_score REAL DEFAULT 0.0",
+    ]
+    with get_conn() as conn:
+        for sql in migrations:
+            try:
+                conn.execute(sql)
+            except sqlite3.OperationalError:
+                pass  # column already exists
 
 
 # ── Users ──────────────────────────────────────────────────────────────────
@@ -134,6 +152,44 @@ def log_event(
         )
 
 
+def get_user_ad_frequency(user_id: str, ad_id: str) -> int:
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) as cnt FROM events WHERE user_id=? AND ad_id=?",
+            (user_id, ad_id),
+        ).fetchone()
+    return row["cnt"] if row else 0
+
+
+def get_category_impression_count(category: str, since_minutes: int = 1440) -> int:
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) as cnt FROM events e"
+            " JOIN ads a ON e.ad_id = a.ad_id"
+            " WHERE a.category=?"
+            " AND e.created_at >= datetime('now', ? || ' minutes')",
+            (category, f"-{since_minutes}"),
+        ).fetchone()
+    return row["cnt"] if row else 0
+
+
+def get_recent_cpa_by_category(category: str, minutes: int = 30) -> float:
+    """Estimate CPA as (impressions / conversions) for recent category events."""
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) as total,"
+            " SUM(CASE WHEN e.event_type IN ('complete','like') THEN 1 ELSE 0 END) as conv"
+            " FROM events e JOIN ads a ON e.ad_id = a.ad_id"
+            " WHERE a.category=?"
+            " AND e.created_at >= datetime('now', ? || ' minutes')",
+            (category, f"-{minutes}"),
+        ).fetchone()
+    if not row or not row["total"] or not row["conv"]:
+        return 0.0
+    ctr = row["conv"] / row["total"]
+    return (1.0 / ctr) if ctr > 0 else 0.0
+
+
 def get_kpi(minutes: int = 60) -> dict[str, Any]:
     with get_conn() as conn:
         rows = conn.execute(
@@ -144,7 +200,8 @@ def get_kpi(minutes: int = 60) -> dict[str, Any]:
                 SUM(CASE WHEN event_type='complete' THEN 1 ELSE 0 END) as completes,
                 SUM(CASE WHEN event_type='like'     THEN 1 ELSE 0 END) as likes,
                 SUM(CASE WHEN event_type='skip'     THEN 1 ELSE 0 END) as skips,
-                AVG(CASE WHEN event_type IN ('complete','like') THEN completion ELSE NULL END) as avg_completion
+                AVG(CASE WHEN event_type IN ('complete','like') THEN completion ELSE NULL END)
+                    as avg_completion
             FROM events
             WHERE created_at >= datetime('now', ? || ' minutes')
             GROUP BY minute
@@ -157,7 +214,7 @@ def get_kpi(minutes: int = 60) -> dict[str, Any]:
     for r in rows:
         impressions = r["impressions"] or 1
         ctr = (r["completes"] + r["likes"]) / impressions
-        ecvr = (r["avg_completion"] or 0.0)
+        ecvr = r["avg_completion"] or 0.0
         cpa = (1.0 / ctr) if ctr > 0 else 0.0
         timeline.append(
             {
