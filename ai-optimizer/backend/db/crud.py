@@ -21,6 +21,24 @@ def init_db() -> None:
     schema = (Path(__file__).parent / "schema.sql").read_text()
     with get_conn() as conn:
         conn.executescript(schema)
+    _migrate_db()
+
+
+def _migrate_db() -> None:
+    """Add new columns to existing DBs without breaking fresh installs."""
+    migrations = [
+        "ALTER TABLE ads ADD COLUMN daily_budget REAL DEFAULT 1000.0",
+        "ALTER TABLE ads ADD COLUMN spent_today  REAL DEFAULT 0.0",
+        "ALTER TABLE ads ADD COLUMN bid_strategy TEXT DEFAULT 'manual'",
+        "ALTER TABLE ads ADD COLUMN target_cpa   REAL DEFAULT 500.0",
+        "ALTER TABLE user_preferences ADD COLUMN confidence_score REAL DEFAULT 0.0",
+    ]
+    with get_conn() as conn:
+        for sql in migrations:
+            try:
+                conn.execute(sql)
+            except sqlite3.OperationalError:
+                pass  # column already exists
 
 
 # ── Users ──────────────────────────────────────────────────────────────────
@@ -134,6 +152,129 @@ def log_event(
         )
 
 
+def get_user_ad_frequency(user_id: str, ad_id: str) -> int:
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) as cnt FROM events WHERE user_id=? AND ad_id=?",
+            (user_id, ad_id),
+        ).fetchone()
+    return row["cnt"] if row else 0
+
+
+def get_category_impression_count(category: str, since_minutes: int = 1440) -> int:
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) as cnt FROM events e"
+            " JOIN ads a ON e.ad_id = a.ad_id"
+            " WHERE a.category=?"
+            " AND e.created_at >= datetime('now', ? || ' minutes')",
+            (category, f"-{since_minutes}"),
+        ).fetchone()
+    return row["cnt"] if row else 0
+
+
+def get_recent_cpa_by_category(category: str, minutes: int = 30) -> float:
+    """Estimate CPA as (impressions / conversions) for recent category events."""
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) as total,"
+            " SUM(CASE WHEN e.event_type IN ('complete','like') THEN 1 ELSE 0 END) as conv"
+            " FROM events e JOIN ads a ON e.ad_id = a.ad_id"
+            " WHERE a.category=?"
+            " AND e.created_at >= datetime('now', ? || ' minutes')",
+            (category, f"-{minutes}"),
+        ).fetchone()
+    if not row or not row["total"] or not row["conv"]:
+        return 0.0
+    ctr = row["conv"] / row["total"]
+    return (1.0 / ctr) if ctr > 0 else 0.0
+
+
+def get_ctr_training_data(limit: int = 2000) -> list[dict[str, Any]]:
+    """Return recent events with joined ad+user-preference data for CTR training."""
+    with get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                e.user_id, e.ad_id, e.event_type, e.dwell_ms, e.completion,
+                e.created_at,
+                a.category, a.vector_json, a.cold_start,
+                up_tech.alpha    AS alpha_tech,    up_tech.beta    AS beta_tech,
+                up_animal.alpha  AS alpha_animal,  up_animal.beta  AS beta_animal,
+                up_comedy.alpha  AS alpha_comedy,  up_comedy.beta  AS beta_comedy,
+                up_news.alpha    AS alpha_news,    up_news.beta    AS beta_news,
+                up_sports.alpha  AS alpha_sports,  up_sports.beta  AS beta_sports
+            FROM events e
+            JOIN ads a ON e.ad_id = a.ad_id
+            LEFT JOIN user_preferences up_tech
+                ON e.user_id = up_tech.user_id   AND up_tech.category   = 'tech'
+            LEFT JOIN user_preferences up_animal
+                ON e.user_id = up_animal.user_id AND up_animal.category = 'animal'
+            LEFT JOIN user_preferences up_comedy
+                ON e.user_id = up_comedy.user_id AND up_comedy.category = 'comedy'
+            LEFT JOIN user_preferences up_news
+                ON e.user_id = up_news.user_id   AND up_news.category   = 'news'
+            LEFT JOIN user_preferences up_sports
+                ON e.user_id = up_sports.user_id AND up_sports.category = 'sports'
+            WHERE e.event_type IN ('complete', 'like', 'skip')
+            ORDER BY e.created_at DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_mf_training_data(limit: int = 5000) -> list[dict[str, Any]]:
+    """Return (user_id, ad_id, label) rows for Matrix Factorization training."""
+    with get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                e.user_id,
+                e.ad_id,
+                CASE WHEN e.event_type IN ('complete','like') THEN 1 ELSE 0 END AS label
+            FROM events e
+            WHERE e.event_type IN ('complete', 'like', 'skip')
+            ORDER BY e.created_at DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_session_training_data(
+    seq_len: int = 10,
+    min_seq: int = 3,
+) -> list[tuple[list[dict[str, Any]], str]]:
+    """Return (event_sequence, next_category) tuples for GRU training."""
+    with get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT e.user_id, e.ad_id, e.event_type, e.dwell_ms,
+                   e.created_at, a.category, a.vector_json
+            FROM events e
+            JOIN ads a ON e.ad_id = a.ad_id
+            ORDER BY e.user_id, e.created_at ASC
+            """,
+        ).fetchall()
+
+    from collections import defaultdict
+    user_events: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for r in rows:
+        user_events[r["user_id"]].append(dict(r))
+
+    samples: list[tuple[list[dict[str, Any]], str]] = []
+    for events in user_events.values():
+        if len(events) < min_seq + 1:
+            continue
+        for i in range(min_seq, len(events)):
+            seq = events[max(0, i - seq_len):i]
+            samples.append((seq, events[i]["category"]))
+    return samples
+
+
 def get_kpi(minutes: int = 60) -> dict[str, Any]:
     with get_conn() as conn:
         rows = conn.execute(
@@ -144,7 +285,8 @@ def get_kpi(minutes: int = 60) -> dict[str, Any]:
                 SUM(CASE WHEN event_type='complete' THEN 1 ELSE 0 END) as completes,
                 SUM(CASE WHEN event_type='like'     THEN 1 ELSE 0 END) as likes,
                 SUM(CASE WHEN event_type='skip'     THEN 1 ELSE 0 END) as skips,
-                AVG(CASE WHEN event_type IN ('complete','like') THEN completion ELSE NULL END) as avg_completion
+                AVG(CASE WHEN event_type IN ('complete','like') THEN completion ELSE NULL END)
+                    as avg_completion
             FROM events
             WHERE created_at >= datetime('now', ? || ' minutes')
             GROUP BY minute
@@ -157,7 +299,7 @@ def get_kpi(minutes: int = 60) -> dict[str, Any]:
     for r in rows:
         impressions = r["impressions"] or 1
         ctr = (r["completes"] + r["likes"]) / impressions
-        ecvr = (r["avg_completion"] or 0.0)
+        ecvr = r["avg_completion"] or 0.0
         cpa = (1.0 / ctr) if ctr > 0 else 0.0
         timeline.append(
             {
