@@ -1,0 +1,9 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  @apply bg-gray-950 text-white;
+  overscroll-behavior: none;
+  user-select: none;
+}
