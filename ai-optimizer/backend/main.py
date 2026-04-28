@@ -14,9 +14,18 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from db.crud import (
+    create_ad_for_campaign,
+    create_campaign,
+    delete_ad,
+    delete_campaign,
     ensure_user,
     get_ad,
+    get_ad_kpi,
+    get_ads_by_campaign,
     get_ads_by_category,
+    get_all_campaigns,
+    get_campaign,
+    get_campaign_kpi,
     get_cold_start_ads,
     get_category_impression_count,
     get_kpi,
@@ -27,6 +36,8 @@ from db.crud import (
     init_db,
     log_event,
     reset_prefs,
+    update_ad,
+    update_campaign,
     update_prefs,
     update_virtual_bid,
 )
@@ -35,6 +46,7 @@ from engine.bayesian import BayesianUpdater
 from engine.bidding import PIDController
 from engine.features import CATEGORIES
 from engine.pacing import PacingEngine
+from engine.seasonality import SeasonalityConfig, SeasonalityEngine
 from engine.thompson import ThompsonSampler
 from ml import MLModelStore, ModelTrainer
 from ml.features import SEQ_LEN, build_ctr_features, build_session_step
@@ -72,6 +84,8 @@ _ml_store   = MLModelStore()
 _ml_trainer = ModelTrainer(_ml_store)
 _server_start: datetime = datetime.now(timezone.utc)
 _agent_runner = AgentRunner()
+_seasonality_engine = SeasonalityEngine()
+_seasonality_config = _seasonality_engine.default_config()
 
 # GRU session cache: {user_id → deque of 10-float step vectors}
 _session_lock: threading.Lock = threading.Lock()
@@ -205,6 +219,57 @@ class AgentStopRequest(BaseModel):
     agent_id: str | None = None
 
 
+class CampaignCreate(BaseModel):
+    name:         str
+    category:     str
+    daily_budget: float = Field(default=1000.0, gt=0)
+    bid_strategy: str   = Field(default="manual", pattern="^(manual|tcpa|max_delivery)$")
+    target_cpa:   float = Field(default=500.0, gt=0)
+
+
+class CampaignUpdate(BaseModel):
+    name:         str   | None = None
+    daily_budget: float | None = Field(default=None, gt=0)
+    bid_strategy: str   | None = Field(default=None, pattern="^(manual|tcpa|max_delivery)$")
+    target_cpa:   float | None = Field(default=None, gt=0)
+    status:       str   | None = Field(default=None, pattern="^(active|paused)$")
+
+
+class AdCreate(BaseModel):
+    campaign_id:  str
+    title:        str
+    category:     str
+    thumbnail:    str   = ""
+    vector_json:  str   = "[0.2,0.2,0.2,0.2,0.2]"
+    virtual_bid:  float = Field(default=1.0, ge=1.0, le=5.0)
+    cold_start:   int   = Field(default=1, ge=0, le=1)
+
+
+class AdUpdate(BaseModel):
+    title:       str   | None = None
+    thumbnail:   str   | None = None
+    virtual_bid: float | None = Field(default=None, ge=1.0, le=5.0)
+    cold_start:  int   | None = Field(default=None, ge=0, le=1)
+    vector_json: str   | None = None
+
+
+class CpaSimulateRequest(BaseModel):
+    category:     str
+    bid:          float = Field(ge=1.0, le=5.0)
+    target_cpa:   float = Field(gt=0)
+    bid_strategy: str   = Field(pattern="^(manual|tcpa|max_delivery)$")
+
+
+class SeasonalityUpdate(BaseModel):
+    cpm_by_hour: list[float] | None = None
+    ctr_by_hour: list[float] | None = None
+    cvr_by_hour: list[float] | None = None
+    cpm_by_dow:  list[float] | None = None
+    ctr_by_dow:  list[float] | None = None
+    cvr_by_dow:  list[float] | None = None
+    enabled:     bool       | None = None
+
+
 # ── /recommend ───────────────────────────────────────────────────────────────
 
 @app.get("/recommend")
@@ -247,7 +312,10 @@ def recommend(user_id: str = Query(...)) -> dict[str, Any]:
         else:
             effective_bid = bids.get(cat, 1.0)
 
-        final_score = raw_sample * effective_bid * pacing * ml_score
+        s_mult = _seasonality_engine.get_multipliers(
+            _seasonality_config, datetime.now(timezone.utc)
+        )
+        final_score = raw_sample * effective_bid * pacing * ml_score * s_mult["ctr"]
         if final_score > best_score:
             best_score    = final_score
             best_category = cat
@@ -270,7 +338,10 @@ def recommend(user_id: str = Query(...)) -> dict[str, Any]:
     fatigue_penalty = round(1.0 - math.exp(-0.3 * freq), 4)
     elasticity_val  = _audience_elasticity(best_category)
 
-    _category_ops[best_category].spent_today += bids.get(best_category, 1.0)
+    s_mult = _seasonality_engine.get_multipliers(
+        _seasonality_config, datetime.now(timezone.utc)
+    )
+    _category_ops[best_category].spent_today += bids.get(best_category, 1.0) * s_mult["cpm"]
 
     return {
         "ad_id":    ad["ad_id"],
@@ -279,13 +350,15 @@ def recommend(user_id: str = Query(...)) -> dict[str, Any]:
         "thumbnail": ad.get("thumbnail", ""),
         "score":    round(best_score, 4),
         "debug": {
-            "pacing_gain":     round(pacing_gains[best_category], 3),
-            "effective_eta":   round(effective_eta, 3),
-            "fatigue_penalty": fatigue_penalty,
-            "elasticity":      round(elasticity_val, 3),
-            "bid_strategy":    _category_ops[best_category].bid_strategy,
-            "model_used":      _ml_strategy,
-            "ml_score":        round(ml_score_best, 4),
+            "pacing_gain":       round(pacing_gains[best_category], 3),
+            "effective_eta":     round(effective_eta, 3),
+            "fatigue_penalty":   fatigue_penalty,
+            "elasticity":        round(elasticity_val, 3),
+            "bid_strategy":      _category_ops[best_category].bid_strategy,
+            "model_used":        _ml_strategy,
+            "ml_score":          round(ml_score_best, 4),
+            "seasonality_ctr":   round(s_mult["ctr"], 4),
+            "seasonality_cpm":   round(s_mult["cpm"], 4),
         },
         "sampled_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -495,8 +568,284 @@ def stop_agents(body: AgentStopRequest) -> dict[str, Any]:
     return {"status": "ok", "stopped_count": count}
 
 
+# ── /admin/seasonality ────────────────────────────────────────────────────────
+
+@app.get("/admin/seasonality")
+def get_seasonality() -> dict[str, Any]:
+    now = datetime.now(timezone.utc)
+    mults = _seasonality_engine.get_multipliers(_seasonality_config, now)
+    return {
+        **_seasonality_config.to_dict(),
+        "current_hour": now.hour,
+        "current_dow": now.weekday(),
+        "current_multipliers": mults,
+    }
+
+
+@app.put("/admin/seasonality")
+def update_seasonality(body: SeasonalityUpdate) -> dict[str, Any]:
+    global _seasonality_config
+    d = _seasonality_config.to_dict()
+    for field_name, val in body.model_dump(exclude_none=True).items():
+        if field_name in d:
+            if isinstance(val, list):
+                expected = 24 if "hour" in field_name else 7
+                if len(val) != expected:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"{field_name} must have {expected} elements",
+                    )
+            d[field_name] = val
+    _seasonality_config = SeasonalityConfig.from_dict(d)
+    return {"status": "ok", **_seasonality_config.to_dict()}
+
+
+@app.post("/admin/seasonality/reset")
+def reset_seasonality() -> dict[str, Any]:
+    global _seasonality_config
+    _seasonality_config = _seasonality_engine.default_config()
+    return {"status": "reset", **_seasonality_config.to_dict()}
+
+
+# ── /admin/portfolio/simulate ─────────────────────────────────────────────────
+
+@app.get("/admin/portfolio/simulate")
+def portfolio_simulate(
+    category:   str   = Query(...),
+    target_cpa: float = Query(..., gt=0),
+    budget:     float = Query(default=10000.0, gt=0),
+    minutes:    int   = Query(default=60, ge=1, le=1440),
+) -> dict[str, Any]:
+    if category not in CATEGORIES:
+        raise HTTPException(status_code=400, detail=f"Unknown category: {category}")
+
+    kpi_data = get_kpi(minutes)
+    timeline = kpi_data["timeline"]
+    avg_ctr = sum(p["ctr"]  for p in timeline) / len(timeline) if timeline else 0.05
+    avg_cvr = sum(p["ecvr"] for p in timeline) / len(timeline) if timeline else 0.02
+    avg_ctr = max(avg_ctr, 0.001)
+    avg_cvr = max(avg_cvr, 0.001)
+
+    s_mult  = _seasonality_engine.get_multipliers(_seasonality_config, datetime.now(timezone.utc))
+    eff_ctr = avg_ctr * s_mult["ctr"]
+    eff_cvr = avg_cvr * s_mult["cvr"]
+
+    # Base CPM estimated from competition & bids
+    bids     = get_virtual_bids()
+    base_bid = bids.get(category, 1.0) * (1 + _competition_level)
+    base_cpm = base_bid * 200 * s_mult["cpm"]   # rough CPM model: bid × 200
+
+    base_cpa = base_cpm / (1000 * max(eff_ctr * eff_cvr, 1e-6))
+
+    results = []
+    best_point = None
+    best_cpa   = float("inf")
+
+    for i in range(11):   # MD ratio 0% → 100% in 10% steps
+        md_ratio = i / 10.0
+        cc_ratio = 1.0 - md_ratio
+
+        # MD: bid=5.0 → wins more auctions, CPM rises ~50%, CTR boost ~20%
+        md_cpm_mult = 1.5
+        md_ctr_mult = 1.2
+        md_cpa  = base_cpa * md_cpm_mult / md_ctr_mult
+        md_imp  = (budget * md_ratio) / max(base_cpm * md_cpm_mult / 1000, 1e-6)
+
+        # CC: target_cpa → ~70% auction win rate, CPA 5% over target
+        cc_win  = 0.7
+        cc_cpa  = target_cpa * 1.05
+        cc_imp  = (budget * cc_ratio * cc_win) / max(base_cpm / 1000, 1e-6)
+
+        p_cpa = md_ratio * md_cpa + cc_ratio * cc_cpa if (md_ratio + cc_ratio) > 0 else cc_cpa
+        p_imp = md_imp + cc_imp
+        p_cv  = p_imp * eff_ctr * eff_cvr
+
+        point = {
+            "md_ratio":      round(md_ratio, 1),
+            "cc_ratio":      round(cc_ratio, 1),
+            "estimated_cpa": round(p_cpa, 0),
+            "estimated_imp": round(p_imp, 0),
+            "estimated_cv":  round(p_cv, 1),
+        }
+        results.append(point)
+
+        if p_cpa < best_cpa:
+            best_cpa   = p_cpa
+            best_point = point
+
+    return {
+        "results":          results,
+        "recommended":      best_point,
+        "base_cpa":         round(base_cpa, 0),
+        "avg_ctr":          round(avg_ctr, 4),
+        "avg_cvr":          round(avg_cvr, 4),
+        "seasonality_active": _seasonality_config.enabled,
+        "current_multipliers": s_mult,
+        "note": "過去実績ベース近似モデル" if timeline else "実績データなし — デフォルト値使用",
+    }
+
+
 # ── /health ───────────────────────────────────────────────────────────────────
 
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+# ── /advertiser/campaigns ────────────────────────────────────────────────────
+
+@app.get("/advertiser/campaigns")
+def list_campaigns() -> list[dict[str, Any]]:
+    campaigns = get_all_campaigns()
+    for cmp in campaigns:
+        ads = get_ads_by_campaign(cmp["campaign_id"])
+        cmp["ad_count"] = len(ads)
+        kpi = get_campaign_kpi(cmp["campaign_id"], minutes=1440)
+        cmp["total_impressions"] = kpi["total_impressions"]
+        cmp["overall_ctr"] = kpi["overall_ctr"]
+        cmp["overall_cpa"] = kpi["overall_cpa"]
+    return campaigns
+
+
+@app.post("/advertiser/campaigns", status_code=201)
+def create_campaign_endpoint(body: CampaignCreate) -> dict[str, Any]:
+    if body.category not in CATEGORIES:
+        raise HTTPException(status_code=400, detail=f"Unknown category: {body.category}")
+    campaign_id = create_campaign(
+        name=body.name,
+        category=body.category,
+        daily_budget=body.daily_budget,
+        bid_strategy=body.bid_strategy,
+        target_cpa=body.target_cpa,
+    )
+    return {"status": "created", "campaign_id": campaign_id}
+
+
+@app.get("/advertiser/campaigns/{campaign_id}")
+def get_campaign_endpoint(campaign_id: str) -> dict[str, Any]:
+    cmp = get_campaign(campaign_id)
+    if not cmp:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    cmp["ads"] = get_ads_by_campaign(campaign_id)
+    return cmp
+
+
+@app.put("/advertiser/campaigns/{campaign_id}")
+def update_campaign_endpoint(campaign_id: str, body: CampaignUpdate) -> dict[str, str]:
+    if not get_campaign(campaign_id):
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    updates = body.model_dump(exclude_none=True)
+    update_campaign(campaign_id, **updates)
+    return {"status": "ok"}
+
+
+@app.delete("/advertiser/campaigns/{campaign_id}")
+def delete_campaign_endpoint(campaign_id: str) -> dict[str, str]:
+    if not get_campaign(campaign_id):
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    delete_campaign(campaign_id)
+    return {"status": "deleted"}
+
+
+# ── /advertiser/campaigns/{id}/ads & kpi ─────────────────────────────────────
+
+@app.get("/advertiser/campaigns/{campaign_id}/ads")
+def list_campaign_ads(campaign_id: str) -> list[dict[str, Any]]:
+    if not get_campaign(campaign_id):
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    return get_ads_by_campaign(campaign_id)
+
+
+@app.get("/advertiser/campaigns/{campaign_id}/kpi")
+def campaign_kpi(
+    campaign_id: str,
+    minutes: int = Query(default=60, ge=1, le=1440),
+) -> dict[str, Any]:
+    if not get_campaign(campaign_id):
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    return get_campaign_kpi(campaign_id, minutes)
+
+
+# ── /advertiser/ads ───────────────────────────────────────────────────────────
+
+@app.post("/advertiser/ads", status_code=201)
+def create_ad_endpoint(body: AdCreate) -> dict[str, Any]:
+    if not get_campaign(body.campaign_id):
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    if body.category not in CATEGORIES:
+        raise HTTPException(status_code=400, detail=f"Unknown category: {body.category}")
+    ad_id = create_ad_for_campaign(
+        campaign_id=body.campaign_id,
+        title=body.title,
+        category=body.category,
+        thumbnail=body.thumbnail,
+        vector_json=body.vector_json,
+        virtual_bid=body.virtual_bid,
+        cold_start=body.cold_start,
+    )
+    return {"status": "created", "ad_id": ad_id}
+
+
+@app.put("/advertiser/ads/{ad_id}")
+def update_ad_endpoint(ad_id: str, body: AdUpdate) -> dict[str, str]:
+    if not get_ad(ad_id):
+        raise HTTPException(status_code=404, detail="Ad not found")
+    updates = body.model_dump(exclude_none=True)
+    update_ad(ad_id, **updates)
+    return {"status": "ok"}
+
+
+@app.delete("/advertiser/ads/{ad_id}")
+def delete_ad_endpoint(ad_id: str) -> dict[str, str]:
+    if not get_ad(ad_id):
+        raise HTTPException(status_code=404, detail="Ad not found")
+    delete_ad(ad_id)
+    return {"status": "deleted"}
+
+
+@app.get("/advertiser/ads/{ad_id}/kpi")
+def ad_kpi(
+    ad_id: str,
+    minutes: int = Query(default=60, ge=1, le=1440),
+) -> dict[str, Any]:
+    if not get_ad(ad_id):
+        raise HTTPException(status_code=404, detail="Ad not found")
+    return get_ad_kpi(ad_id, minutes)
+
+
+# ── /advertiser/simulate/cpa ──────────────────────────────────────────────────
+
+@app.post("/advertiser/simulate/cpa")
+def simulate_cpa(body: CpaSimulateRequest) -> dict[str, Any]:
+    if body.category not in CATEGORIES:
+        raise HTTPException(status_code=400, detail=f"Unknown category: {body.category}")
+
+    kpi_data = get_kpi(minutes=60)
+    timeline = kpi_data["timeline"]
+    if timeline:
+        avg_ctr  = sum(p["ctr"]  for p in timeline) / len(timeline)
+        avg_ecvr = sum(p["ecvr"] for p in timeline) / len(timeline)
+    else:
+        avg_ctr, avg_ecvr = 0.05, 0.02
+
+    # Higher bid boosts CTR via more impressions won in auction
+    bid_boost = 1.0 + (body.bid - 1.0) * 0.08
+    est_ctr   = min(avg_ctr * bid_boost, 1.0)
+
+    # CPA = cost per conversion; base cost proportional to bid
+    base_cpa = body.bid / (est_ctr * max(avg_ecvr, 0.01))
+    est_cpa  = base_cpa * (1.0 + _competition_level)
+
+    gap = body.target_cpa - est_cpa
+    feasible = gap >= 0
+
+    return {
+        "estimated_cpa":    round(est_cpa, 0),
+        "estimated_ctr":    round(est_ctr, 4),
+        "estimated_ecvr":   round(avg_ecvr, 4),
+        "target_cpa":       body.target_cpa,
+        "gap":              round(gap, 0),
+        "feasible":         feasible,
+        "competition_level": _competition_level,
+        "note":             "過去60分の実績ベース推定値" if timeline else "実績データなし — デフォルト値使用",
+    }

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -27,10 +28,11 @@ def init_db() -> None:
 def _migrate_db() -> None:
     """Add new columns to existing DBs without breaking fresh installs."""
     migrations = [
-        "ALTER TABLE ads ADD COLUMN daily_budget REAL DEFAULT 1000.0",
-        "ALTER TABLE ads ADD COLUMN spent_today  REAL DEFAULT 0.0",
-        "ALTER TABLE ads ADD COLUMN bid_strategy TEXT DEFAULT 'manual'",
-        "ALTER TABLE ads ADD COLUMN target_cpa   REAL DEFAULT 500.0",
+        "ALTER TABLE ads ADD COLUMN daily_budget  REAL DEFAULT 1000.0",
+        "ALTER TABLE ads ADD COLUMN spent_today   REAL DEFAULT 0.0",
+        "ALTER TABLE ads ADD COLUMN bid_strategy  TEXT DEFAULT 'manual'",
+        "ALTER TABLE ads ADD COLUMN target_cpa    REAL DEFAULT 500.0",
+        "ALTER TABLE ads ADD COLUMN campaign_id   TEXT REFERENCES campaigns(campaign_id)",
         "ALTER TABLE user_preferences ADD COLUMN confidence_score REAL DEFAULT 0.0",
     ]
     with get_conn() as conn:
@@ -273,6 +275,197 @@ def get_session_training_data(
             seq = events[max(0, i - seq_len):i]
             samples.append((seq, events[i]["category"]))
     return samples
+
+
+# ── Campaigns ──────────────────────────────────────────────────────────────
+
+def create_campaign(
+    name: str,
+    category: str,
+    daily_budget: float,
+    bid_strategy: str,
+    target_cpa: float,
+) -> str:
+    campaign_id = "cmp_" + uuid.uuid4().hex[:8]
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT INTO campaigns(campaign_id, name, category, daily_budget, bid_strategy, target_cpa)"
+            " VALUES (?, ?, ?, ?, ?, ?)",
+            (campaign_id, name, category, daily_budget, bid_strategy, target_cpa),
+        )
+    return campaign_id
+
+
+def get_all_campaigns() -> list[dict[str, Any]]:
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM campaigns ORDER BY created_at DESC"
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_campaign(campaign_id: str) -> dict[str, Any] | None:
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM campaigns WHERE campaign_id=?", (campaign_id,)
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def update_campaign(campaign_id: str, **kwargs: Any) -> None:
+    allowed = {"name", "daily_budget", "bid_strategy", "target_cpa", "status", "category"}
+    sets = {k: v for k, v in kwargs.items() if k in allowed}
+    if not sets:
+        return
+    cols = ", ".join(f"{k}=?" for k in sets)
+    vals = list(sets.values()) + [campaign_id]
+    with get_conn() as conn:
+        conn.execute(f"UPDATE campaigns SET {cols} WHERE campaign_id=?", vals)
+
+
+def delete_campaign(campaign_id: str) -> None:
+    with get_conn() as conn:
+        conn.execute("UPDATE ads SET campaign_id=NULL WHERE campaign_id=?", (campaign_id,))
+        conn.execute("DELETE FROM campaigns WHERE campaign_id=?", (campaign_id,))
+
+
+# ── Campaign Ads ────────────────────────────────────────────────────────────
+
+def create_ad_for_campaign(
+    campaign_id: str,
+    title: str,
+    category: str,
+    thumbnail: str,
+    vector_json: str,
+    virtual_bid: float,
+    cold_start: int,
+) -> str:
+    short = uuid.uuid4().hex[:4]
+    ad_id = f"{category[:3]}_cmp_{short}"
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT INTO ads(ad_id, campaign_id, title, category, thumbnail,"
+            " vector_json, virtual_bid, cold_start)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (ad_id, campaign_id, title, category, thumbnail,
+             vector_json, virtual_bid, cold_start),
+        )
+    return ad_id
+
+
+def get_ads_by_campaign(campaign_id: str) -> list[dict[str, Any]]:
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM ads WHERE campaign_id=? ORDER BY created_at DESC",
+            (campaign_id,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def update_ad(ad_id: str, **kwargs: Any) -> None:
+    allowed = {"title", "thumbnail", "virtual_bid", "cold_start", "vector_json", "category"}
+    sets = {k: v for k, v in kwargs.items() if k in allowed}
+    if not sets:
+        return
+    cols = ", ".join(f"{k}=?" for k in sets)
+    vals = list(sets.values()) + [ad_id]
+    with get_conn() as conn:
+        conn.execute(f"UPDATE ads SET {cols} WHERE ad_id=?", vals)
+
+
+def delete_ad(ad_id: str) -> None:
+    with get_conn() as conn:
+        conn.execute("DELETE FROM ads WHERE ad_id=?", (ad_id,))
+
+
+def get_campaign_kpi(campaign_id: str, minutes: int = 60) -> dict[str, Any]:
+    with get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                strftime('%Y-%m-%dT%H:%M:00', e.created_at) as minute,
+                COUNT(*) as impressions,
+                SUM(CASE WHEN e.event_type='complete' THEN 1 ELSE 0 END) as completes,
+                SUM(CASE WHEN e.event_type='like'     THEN 1 ELSE 0 END) as likes,
+                AVG(CASE WHEN e.event_type IN ('complete','like') THEN e.completion ELSE NULL END)
+                    as avg_completion
+            FROM events e
+            JOIN ads a ON e.ad_id = a.ad_id
+            WHERE a.campaign_id=?
+              AND e.created_at >= datetime('now', ? || ' minutes')
+            GROUP BY minute
+            ORDER BY minute
+            """,
+            (campaign_id, f"-{minutes}"),
+        ).fetchall()
+
+        total = conn.execute(
+            """
+            SELECT COUNT(*) as impressions,
+                   SUM(CASE WHEN e.event_type IN ('complete','like') THEN 1 ELSE 0 END) as conv
+            FROM events e JOIN ads a ON e.ad_id = a.ad_id
+            WHERE a.campaign_id=?
+              AND e.created_at >= datetime('now', ? || ' minutes')
+            """,
+            (campaign_id, f"-{minutes}"),
+        ).fetchone()
+
+    timeline = []
+    for r in rows:
+        imp = r["impressions"] or 1
+        ctr = (r["completes"] + r["likes"]) / imp
+        ecvr = r["avg_completion"] or 0.0
+        cpa = round(1.0 / ctr, 2) if ctr > 0 else 0.0
+        timeline.append({
+            "minute": r["minute"],
+            "impressions": imp,
+            "ctr": round(ctr, 4),
+            "ecvr": round(ecvr, 4),
+            "cpa": cpa,
+        })
+
+    imp_total = total["impressions"] or 0
+    conv_total = total["conv"] or 0
+    overall_ctr = conv_total / imp_total if imp_total else 0.0
+    return {
+        "timeline": timeline,
+        "minutes": minutes,
+        "total_impressions": imp_total,
+        "total_conversions": conv_total,
+        "overall_ctr": round(overall_ctr, 4),
+        "overall_cpa": round(1.0 / overall_ctr, 2) if overall_ctr > 0 else 0.0,
+    }
+
+
+def get_ad_kpi(ad_id: str, minutes: int = 60) -> dict[str, Any]:
+    with get_conn() as conn:
+        row = conn.execute(
+            """
+            SELECT COUNT(*) as impressions,
+                   SUM(CASE WHEN event_type IN ('complete','like') THEN 1 ELSE 0 END) as conv,
+                   AVG(CASE WHEN event_type IN ('complete','like') THEN completion ELSE NULL END)
+                       as avg_completion,
+                   AVG(dwell_ms) as avg_dwell_ms
+            FROM events
+            WHERE ad_id=?
+              AND created_at >= datetime('now', ? || ' minutes')
+            """,
+            (ad_id, f"-{minutes}"),
+        ).fetchone()
+
+    imp = row["impressions"] or 0
+    conv = row["conv"] or 0
+    ctr = conv / imp if imp else 0.0
+    return {
+        "ad_id": ad_id,
+        "minutes": minutes,
+        "impressions": imp,
+        "conversions": conv,
+        "ctr": round(ctr, 4),
+        "ecvr": round(row["avg_completion"] or 0.0, 4),
+        "cpa": round(1.0 / ctr, 2) if ctr > 0 else 0.0,
+        "avg_dwell_ms": round(row["avg_dwell_ms"] or 0.0, 0),
+    }
 
 
 def get_kpi(minutes: int = 60) -> dict[str, Any]:

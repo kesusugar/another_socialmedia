@@ -43,3 +43,17 @@ CREATE INDEX IF NOT EXISTS idx_events_user     ON events(user_id);
 CREATE INDEX IF NOT EXISTS idx_events_time     ON events(created_at);
 CREATE INDEX IF NOT EXISTS idx_events_ad       ON events(ad_id);
 CREATE INDEX IF NOT EXISTS idx_ads_category    ON ads(category);
+
+CREATE TABLE IF NOT EXISTS campaigns (
+  campaign_id   TEXT PRIMARY KEY,
+  name          TEXT NOT NULL,
+  daily_budget  REAL NOT NULL DEFAULT 1000.0,
+  bid_strategy  TEXT NOT NULL DEFAULT 'manual',
+  target_cpa    REAL NOT NULL DEFAULT 500.0,
+  category      TEXT NOT NULL,
+  status        TEXT NOT NULL DEFAULT 'active',
+  created_at    DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_campaigns_category ON campaigns(category);
+CREATE INDEX IF NOT EXISTS idx_ads_campaign        ON ads(campaign_id);
