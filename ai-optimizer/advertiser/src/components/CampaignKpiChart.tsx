@@ -41,10 +41,11 @@ export function CampaignKpiChart({ campaignId }: Props) {
           <h3 className="font-bold">パフォーマンス</h3>
           {kpi && (
             <p className="text-xs text-gray-500">
-              IMP: {kpi.total_impressions.toLocaleString()} / CV:{" "}
+              IMP: {kpi.total_impressions.toLocaleString()} / LP: {(kpi.total_lp_clicks ?? 0).toLocaleString()} / CV:{" "}
               {kpi.total_conversions.toLocaleString()} / CTR:{" "}
-              {(kpi.overall_ctr * 100).toFixed(2)}% / CPA:{" "}
-              {kpi.overall_cpa > 0 ? `¥${kpi.overall_cpa.toLocaleString()}` : "—"}
+              {(kpi.overall_ctr * 100).toFixed(2)}% / CVR:{" "}
+              {((kpi.overall_cvr ?? 0) * 100).toFixed(2)}% / CPA:{" "}
+              {(kpi.overall_cpa_yen ?? 0) > 0 ? `¥${Math.round(kpi.overall_cpa_yen ?? 0).toLocaleString()}` : "—"}
             </p>
           )}
         </div>
@@ -81,9 +82,9 @@ export function CampaignKpiChart({ campaignId }: Props) {
             <YAxis yAxisId="right" orientation="right" stroke="#9ca3af" tick={{ fontSize: 11 }} />
             <Tooltip contentStyle={{ background: "#111827", border: "1px solid #374151" }} />
             <Legend />
-            <Line yAxisId="left" type="monotone" dataKey="ctr" stroke="#60a5fa" dot={false} name="CTR" />
-            <Line yAxisId="left" type="monotone" dataKey="ecvr" stroke="#34d399" dot={false} name="eCVR" />
-            <Line yAxisId="right" type="monotone" dataKey="cpa" stroke="#f87171" dot={false} name="CPA" strokeWidth={2} />
+            <Line yAxisId="left" type="monotone" dataKey="ctr"     stroke="#60a5fa" dot={false} name="CTR（LP遷移率）" />
+            <Line yAxisId="left" type="monotone" dataKey="cvr"     stroke="#34d399" dot={false} name="CVR（購入率）" />
+            <Line yAxisId="right" type="monotone" dataKey="cpa_yen" stroke="#f87171" dot={false} name="CPA(円)" strokeWidth={2} />
           </LineChart>
         </ResponsiveContainer>
       )}

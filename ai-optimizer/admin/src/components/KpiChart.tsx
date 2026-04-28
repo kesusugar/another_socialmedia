@@ -7,9 +7,11 @@ import {
 interface KpiPoint {
   minute: string;
   ctr: number;
-  ecvr: number;
-  cpa: number;
+  cvr: number;
+  cpa_yen: number;
   impressions: number;
+  lp_clicks: number;
+  purchases: number;
 }
 
 interface KpiResponse {
@@ -131,24 +133,19 @@ export function KpiChart() {
           <LineChart data={data}>
             <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
             <XAxis dataKey="minute" stroke="#9ca3af" tick={{ fontSize: 11 }} />
-            <YAxis yAxisId="left" stroke="#9ca3af" tick={{ fontSize: 11 }} />
-            <YAxis yAxisId="right" orientation="right" stroke="#9ca3af" tick={{ fontSize: 11 }} />
+            <YAxis yAxisId="left" stroke="#9ca3af" tick={{ fontSize: 11 }} tickFormatter={(v: number) => `${(v * 100).toFixed(1)}%`} />
+            <YAxis yAxisId="right" orientation="right" stroke="#f87171" tick={{ fontSize: 11 }} tickFormatter={(v: number) => `¥${v.toLocaleString()}`} />
             <Tooltip
               contentStyle={{ background: "#111827", border: "1px solid #374151" }}
+              formatter={(v: number, name: string) => {
+                if (name === "CPA(円)") return [`¥${v.toLocaleString()}`, name];
+                return [`${(v * 100).toFixed(2)}%`, name];
+              }}
             />
             <Legend />
-            <Line yAxisId="left" type="monotone" dataKey="ctr" stroke="#60a5fa" dot={false} name="CTR" />
-            <Line yAxisId="left" type="monotone" dataKey="ecvr" stroke="#34d399" dot={false} name="eCVR" />
-            <Line yAxisId="right" type="monotone" dataKey="cpa" stroke="#f87171" dot={false} name="CPA（競合調整済）" strokeWidth={2} />
-            {competition > 0 && (
-              <ReferenceLine
-                yAxisId="right"
-                y={0}
-                label={{ value: `競合+${(competition * 100).toFixed(0)}%`, fill: "#f472b6", fontSize: 10 }}
-                stroke="#f472b6"
-                strokeDasharray="4 4"
-              />
-            )}
+            <Line yAxisId="left"  type="monotone" dataKey="ctr"     stroke="#60a5fa" dot={false} name="CTR（LP遷移率）" />
+            <Line yAxisId="left"  type="monotone" dataKey="cvr"     stroke="#34d399" dot={false} name="CVR（購入率）" />
+            <Line yAxisId="right" type="monotone" dataKey="cpa_yen" stroke="#f87171" dot={false} name="CPA(円)" strokeWidth={2} />
           </LineChart>
         </ResponsiveContainer>
       )}

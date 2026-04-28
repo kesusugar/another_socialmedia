@@ -25,6 +25,12 @@ def init_db() -> None:
         conn.executescript(schema)
 
 
+CATEGORY_CPM_YEN: dict[str, float] = {
+    "tech": 800.0, "animal": 600.0, "comedy": 500.0, "news": 700.0, "sports": 650.0,
+}
+DEFAULT_CPM_YEN = 700.0
+
+
 def _migrate_db() -> None:
     """Add new columns to existing DBs without breaking fresh installs."""
     migrations = [
@@ -34,6 +40,9 @@ def _migrate_db() -> None:
         "ALTER TABLE ads ADD COLUMN target_cpa    REAL DEFAULT 500.0",
         "ALTER TABLE ads ADD COLUMN campaign_id   TEXT REFERENCES campaigns(campaign_id)",
         "ALTER TABLE user_preferences ADD COLUMN confidence_score REAL DEFAULT 0.0",
+        "ALTER TABLE campaigns ADD COLUMN cvr_tier TEXT DEFAULT 'standard'",
+        "ALTER TABLE campaigns ADD COLUMN cvr_rate REAL DEFAULT 0.005",
+        "ALTER TABLE campaigns ADD COLUMN cpm_yen  REAL DEFAULT 700.0",
     ]
     with get_conn() as conn:
         for sql in migrations:
@@ -279,6 +288,20 @@ def get_session_training_data(
 
 # ── Campaigns ──────────────────────────────────────────────────────────────
 
+def _assign_cvr_tier() -> tuple[str, float]:
+    """Randomly assign CVR tier based on real-world distribution."""
+    import random as _rand
+    r = _rand.random()
+    if r < 0.50:
+        return ("poor",      0.002)
+    elif r < 0.80:
+        return ("standard",  0.005)
+    elif r < 0.95:
+        return ("good",      0.010)
+    else:
+        return ("excellent", 0.020)
+
+
 def create_campaign(
     name: str,
     category: str,
@@ -287,11 +310,15 @@ def create_campaign(
     target_cpa: float,
 ) -> str:
     campaign_id = "cmp_" + uuid.uuid4().hex[:8]
+    cvr_tier, cvr_rate = _assign_cvr_tier()
+    cpm_yen = CATEGORY_CPM_YEN.get(category, DEFAULT_CPM_YEN)
     with get_conn() as conn:
         conn.execute(
-            "INSERT INTO campaigns(campaign_id, name, category, daily_budget, bid_strategy, target_cpa)"
-            " VALUES (?, ?, ?, ?, ?, ?)",
-            (campaign_id, name, category, daily_budget, bid_strategy, target_cpa),
+            "INSERT INTO campaigns(campaign_id, name, category, daily_budget, bid_strategy,"
+            " target_cpa, cvr_tier, cvr_rate, cpm_yen)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (campaign_id, name, category, daily_budget, bid_strategy,
+             target_cpa, cvr_tier, cvr_rate, cpm_yen),
         )
     return campaign_id
 
@@ -380,15 +407,18 @@ def delete_ad(ad_id: str) -> None:
 
 def get_campaign_kpi(campaign_id: str, minutes: int = 60) -> dict[str, Any]:
     with get_conn() as conn:
+        camp = conn.execute(
+            "SELECT cpm_yen FROM campaigns WHERE campaign_id=?", (campaign_id,)
+        ).fetchone()
+        cpm_yen = (camp["cpm_yen"] if camp else None) or DEFAULT_CPM_YEN
+
         rows = conn.execute(
             """
             SELECT
                 strftime('%Y-%m-%dT%H:%M:00', e.created_at) as minute,
-                COUNT(*) as impressions,
-                SUM(CASE WHEN e.event_type='complete' THEN 1 ELSE 0 END) as completes,
-                SUM(CASE WHEN e.event_type='like'     THEN 1 ELSE 0 END) as likes,
-                AVG(CASE WHEN e.event_type IN ('complete','like') THEN e.completion ELSE NULL END)
-                    as avg_completion
+                SUM(CASE WHEN e.event_type='impression' THEN 1 ELSE 0 END) as impressions,
+                SUM(CASE WHEN e.event_type='lp_click'   THEN 1 ELSE 0 END) as lp_clicks,
+                SUM(CASE WHEN e.event_type='purchase'   THEN 1 ELSE 0 END) as purchases
             FROM events e
             JOIN ads a ON e.ad_id = a.ad_id
             WHERE a.campaign_id=?
@@ -401,8 +431,10 @@ def get_campaign_kpi(campaign_id: str, minutes: int = 60) -> dict[str, Any]:
 
         total = conn.execute(
             """
-            SELECT COUNT(*) as impressions,
-                   SUM(CASE WHEN e.event_type IN ('complete','like') THEN 1 ELSE 0 END) as conv
+            SELECT
+                SUM(CASE WHEN e.event_type='impression' THEN 1 ELSE 0 END) as impressions,
+                SUM(CASE WHEN e.event_type='lp_click'   THEN 1 ELSE 0 END) as lp_clicks,
+                SUM(CASE WHEN e.event_type='purchase'   THEN 1 ELSE 0 END) as purchases
             FROM events e JOIN ads a ON e.ad_id = a.ad_id
             WHERE a.campaign_id=?
               AND e.created_at >= datetime('now', ? || ' minutes')
@@ -412,28 +444,37 @@ def get_campaign_kpi(campaign_id: str, minutes: int = 60) -> dict[str, Any]:
 
     timeline = []
     for r in rows:
-        imp = r["impressions"] or 1
-        ctr = (r["completes"] + r["likes"]) / imp
-        ecvr = r["avg_completion"] or 0.0
-        cpa = round(1.0 / ctr, 2) if ctr > 0 else 0.0
+        imp = r["impressions"] or 0
+        lp  = r["lp_clicks"]  or 0
+        pur = r["purchases"]   or 0
+        ctr = lp  / imp if imp > 0 else 0.0
+        cvr = pur / lp  if lp  > 0 else 0.0
+        cpa_yen = cpm_yen / (1000 * ctr * cvr) if (ctr > 0 and cvr > 0) else 0.0
         timeline.append({
-            "minute": r["minute"],
+            "minute":      r["minute"],
             "impressions": imp,
-            "ctr": round(ctr, 4),
-            "ecvr": round(ecvr, 4),
-            "cpa": cpa,
+            "lp_clicks":   lp,
+            "purchases":   pur,
+            "ctr":         round(ctr, 4),
+            "cvr":         round(cvr, 4),
+            "cpa_yen":     round(cpa_yen, 0),
         })
 
     imp_total = total["impressions"] or 0
-    conv_total = total["conv"] or 0
-    overall_ctr = conv_total / imp_total if imp_total else 0.0
+    lp_total  = total["lp_clicks"]  or 0
+    pur_total = total["purchases"]  or 0
+    overall_ctr = lp_total  / imp_total if imp_total else 0.0
+    overall_cvr = pur_total / lp_total  if lp_total  else 0.0
+    overall_cpa = cpm_yen / (1000 * overall_ctr * overall_cvr) if (overall_ctr > 0 and overall_cvr > 0) else 0.0
     return {
-        "timeline": timeline,
-        "minutes": minutes,
+        "timeline":          timeline,
+        "minutes":           minutes,
         "total_impressions": imp_total,
-        "total_conversions": conv_total,
-        "overall_ctr": round(overall_ctr, 4),
-        "overall_cpa": round(1.0 / overall_ctr, 2) if overall_ctr > 0 else 0.0,
+        "total_lp_clicks":   lp_total,
+        "total_conversions": pur_total,
+        "overall_ctr":       round(overall_ctr, 4),
+        "overall_cvr":       round(overall_cvr, 4),
+        "overall_cpa_yen":   round(overall_cpa, 0),
     }
 
 
@@ -474,12 +515,9 @@ def get_kpi(minutes: int = 60) -> dict[str, Any]:
             """
             SELECT
                 strftime('%Y-%m-%dT%H:%M:00', created_at) as minute,
-                COUNT(*) as impressions,
-                SUM(CASE WHEN event_type='complete' THEN 1 ELSE 0 END) as completes,
-                SUM(CASE WHEN event_type='like'     THEN 1 ELSE 0 END) as likes,
-                SUM(CASE WHEN event_type='skip'     THEN 1 ELSE 0 END) as skips,
-                AVG(CASE WHEN event_type IN ('complete','like') THEN completion ELSE NULL END)
-                    as avg_completion
+                SUM(CASE WHEN event_type='impression' THEN 1 ELSE 0 END) as impressions,
+                SUM(CASE WHEN event_type='lp_click'   THEN 1 ELSE 0 END) as lp_clicks,
+                SUM(CASE WHEN event_type='purchase'   THEN 1 ELSE 0 END) as purchases
             FROM events
             WHERE created_at >= datetime('now', ? || ' minutes')
             GROUP BY minute
@@ -490,17 +528,19 @@ def get_kpi(minutes: int = 60) -> dict[str, Any]:
 
     timeline = []
     for r in rows:
-        impressions = r["impressions"] or 1
-        ctr = (r["completes"] + r["likes"]) / impressions
-        ecvr = r["avg_completion"] or 0.0
-        cpa = (1.0 / ctr) if ctr > 0 else 0.0
-        timeline.append(
-            {
-                "minute": r["minute"],
-                "impressions": impressions,
-                "ctr": round(ctr, 4),
-                "ecvr": round(ecvr, 4),
-                "cpa": round(cpa, 2),
-            }
-        )
+        imp = r["impressions"] or 0
+        lp  = r["lp_clicks"]  or 0
+        pur = r["purchases"]   or 0
+        ctr = lp  / imp if imp > 0 else 0.0
+        cvr = pur / lp  if lp  > 0 else 0.0
+        cpa_yen = DEFAULT_CPM_YEN / (1000 * ctr * cvr) if (ctr > 0 and cvr > 0) else 0.0
+        timeline.append({
+            "minute":      r["minute"],
+            "impressions": imp,
+            "lp_clicks":   lp,
+            "purchases":   pur,
+            "ctr":         round(ctr, 4),
+            "cvr":         round(cvr, 4),
+            "cpa_yen":     round(cpa_yen, 0),
+        })
     return {"timeline": timeline, "minutes": minutes}

@@ -95,7 +95,7 @@ def decide_event(
         return "complete", max(1000, dwell), round(random.uniform(0.8, 1.0), 2)
     elif r < p_complete + p_like:
         dwell = int(random.gauss(5000, 1500))
-        return "like", max(500, dwell), round(random.uniform(0.5, 0.9), 2)
+        return "lp_click", max(500, dwell), round(random.uniform(0.5, 0.9), 2)
     else:
         dwell = int(random.gauss(900, 400))
         return "skip", max(100, dwell), round(random.uniform(0.0, 0.3), 2)

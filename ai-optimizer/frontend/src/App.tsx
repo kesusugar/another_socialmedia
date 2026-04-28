@@ -3,7 +3,7 @@ import { SwipeCard } from "./components/SwipeCard";
 import { useRecommend } from "./hooks/useRecommend";
 
 export default function App() {
-  const { current, loading, swipe, userId } = useRecommend();
+  const { current, loading, swipe, lpClick, userId } = useRecommend();
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center bg-gray-950">
@@ -16,7 +16,7 @@ export default function App() {
 
         <AnimatePresence mode="wait">
           {current && (
-            <SwipeCard key={current.ad_id} card={current} onSwipe={swipe} />
+            <SwipeCard key={current.ad_id} card={current} onSwipe={swipe} onLpClick={lpClick} />
           )}
         </AnimatePresence>
       </div>

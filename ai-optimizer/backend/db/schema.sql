@@ -52,6 +52,9 @@ CREATE TABLE IF NOT EXISTS campaigns (
   target_cpa    REAL NOT NULL DEFAULT 500.0,
   category      TEXT NOT NULL,
   status        TEXT NOT NULL DEFAULT 'active',
+  cvr_tier      TEXT NOT NULL DEFAULT 'standard',
+  cvr_rate      REAL NOT NULL DEFAULT 0.005,
+  cpm_yen       REAL NOT NULL DEFAULT 700.0,
   created_at    DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
