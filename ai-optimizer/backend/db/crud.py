@@ -19,10 +19,10 @@ def get_conn() -> sqlite3.Connection:
 
 
 def init_db() -> None:
+    _migrate_db()
     schema = (Path(__file__).parent / "schema.sql").read_text()
     with get_conn() as conn:
         conn.executescript(schema)
-    _migrate_db()
 
 
 def _migrate_db() -> None:
