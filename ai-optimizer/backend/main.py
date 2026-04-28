@@ -290,9 +290,10 @@ def recommend(user_id: str = Query(...)) -> dict[str, Any]:
     sampler = ThompsonSampler(eta=effective_eta)
     raw_ranked = sampler.rank(prefs, virtual_bids=None)
 
-    # Pre-fetch all ads per category (avoids repeated DB round-trips)
+    # Pre-fetch only campaign-linked ads per category
     all_cat_ads: dict[str, list[dict[str, Any]]] = {
-        cat: get_ads_by_category(cat) for cat in CATEGORIES
+        cat: [a for a in get_ads_by_category(cat) if a.get("campaign_id")]
+        for cat in CATEGORIES
     }
 
     best_category = CATEGORIES[0]
@@ -322,10 +323,10 @@ def recommend(user_id: str = Query(...)) -> dict[str, Any]:
             best_category = cat
             ml_score_best = ml_score
 
-    # Cold-start for brand-new users
+    # Cold-start for brand-new users (campaign ads only)
     all_default = all(p["alpha"] == 1.0 and p["beta"] == 1.0 for p in prefs.values())
     if all_default:
-        cold = get_cold_start_ads(limit=5)
+        cold = [a for a in get_cold_start_ads(limit=5) if a.get("campaign_id")]
         filtered = [a for a in cold if a["category"] == best_category]
         ads = filtered or cold
     else:

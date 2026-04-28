@@ -63,6 +63,15 @@ DEFAULT_PERSONAS: dict[str, Persona] = {
         fatigue_rate=0.15,
         swipe_interval_sec=2.0,
     ),
+    "sports_fan": Persona(
+        name="sports_fan",
+        description="スポーツ観戦が趣味で試合ハイライトを中心に消費する熱狂的ファン",
+        preferred_categories={"sports": 0.85, "news": 0.40, "comedy": 0.20, "tech": 0.10, "animal": 0.05},
+        behavior_style="binge",
+        active_hours=(18, 24),
+        fatigue_rate=0.20,
+        swipe_interval_sec=4.0,
+    ),
 }
 
 
