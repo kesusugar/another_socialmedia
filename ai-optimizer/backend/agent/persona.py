@@ -63,6 +63,15 @@ DEFAULT_PERSONAS: dict[str, Persona] = {
         fatigue_rate=0.15,
         swipe_interval_sec=2.0,
     ),
+    "sports_fan": Persona(
+        name="sports_fan",
+        description="スポーツ観戦が趣味で試合ハイライトを中心に消費する熱狂的ファン",
+        preferred_categories={"sports": 0.85, "news": 0.40, "comedy": 0.20, "tech": 0.10, "animal": 0.05},
+        behavior_style="binge",
+        active_hours=(18, 24),
+        fatigue_rate=0.20,
+        swipe_interval_sec=4.0,
+    ),
 }
 
 
@@ -95,7 +104,7 @@ def decide_event(
         return "complete", max(1000, dwell), round(random.uniform(0.8, 1.0), 2)
     elif r < p_complete + p_like:
         dwell = int(random.gauss(5000, 1500))
-        return "like", max(500, dwell), round(random.uniform(0.5, 0.9), 2)
+        return "lp_click", max(500, dwell), round(random.uniform(0.5, 0.9), 2)
     else:
         dwell = int(random.gauss(900, 400))
         return "skip", max(100, dwell), round(random.uniform(0.0, 0.3), 2)

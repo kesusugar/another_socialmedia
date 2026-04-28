@@ -7,6 +7,7 @@ const CATEGORY_COLORS: Record<string, string> = {
   comedy:  "from-yellow-400 to-orange-600",
   news:    "from-gray-500 to-slate-700",
   sports:  "from-red-500 to-rose-700",
+  organic: "from-purple-600 to-pink-700",
 };
 
 const CATEGORY_EMOJI: Record<string, string> = {
@@ -15,14 +16,16 @@ const CATEGORY_EMOJI: Record<string, string> = {
   comedy:  "😂",
   news:    "📰",
   sports:  "⚽",
+  organic: "🎬",
 };
 
 interface Props {
   card: AdCard;
   onSwipe: (direction: "up" | "down" | "right") => void;
+  onLpClick?: () => void;
 }
 
-export function SwipeCard({ card, onSwipe }: Props) {
+export function SwipeCard({ card, onSwipe, onLpClick }: Props) {
   const y = useMotionValue(0);
   const x = useMotionValue(0);
 
@@ -69,6 +72,13 @@ export function SwipeCard({ card, onSwipe }: Props) {
         style={{ opacity: overlayOpacity }}
       />
 
+      {/* 広告バッジ */}
+      {!card.is_organic && (
+        <div className="absolute top-4 right-4 z-20 bg-red-500 text-white text-xs font-bold px-2 py-0.5 rounded">
+          広告
+        </div>
+      )}
+
       {/* Content */}
       <div className="relative z-10 flex flex-col items-center gap-6 px-6 text-center">
         <span className="text-8xl">{emoji}</span>
@@ -78,8 +88,23 @@ export function SwipeCard({ card, onSwipe }: Props) {
           </p>
           <h2 className="text-2xl font-bold text-white leading-tight">{card.title}</h2>
         </div>
-        <p className="text-xs text-white/40">スコア: {card.score.toFixed(3)}</p>
+        {!card.is_organic && (
+          <p className="text-xs text-white/40">スコア: {card.score.toFixed(3)}</p>
+        )}
       </div>
+
+      {/* LP遷移ボタン（広告のみ） */}
+      {!card.is_organic && onLpClick && (
+        <button
+          className="absolute bottom-16 left-1/2 -translate-x-1/2 z-20 bg-white text-gray-900 text-sm font-bold px-6 py-2 rounded-full shadow-lg hover:bg-gray-100 active:scale-95 transition-transform"
+          onClick={(e) => {
+            e.stopPropagation();
+            onLpClick();
+          }}
+        >
+          詳しくはこちら →
+        </button>
+      )}
 
       {/* Like overlay */}
       <motion.div

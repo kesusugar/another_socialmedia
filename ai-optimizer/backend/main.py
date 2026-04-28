@@ -86,6 +86,7 @@ _server_start: datetime = datetime.now(timezone.utc)
 _agent_runner = AgentRunner()
 _seasonality_engine = SeasonalityEngine()
 _seasonality_config = _seasonality_engine.default_config()
+_campaign_impression_wins: dict[str, int] = {}
 
 # GRU session cache: {user_id → deque of 10-float step vectors}
 _session_lock: threading.Lock = threading.Lock()
@@ -173,7 +174,7 @@ def _ml_score_for_category(
 class EventLog(BaseModel):
     user_id:    str
     ad_id:      str
-    event_type: str = Field(pattern="^(complete|skip|like|impression)$")
+    event_type: str = Field(pattern="^(complete|skip|like|impression|lp_click|purchase)$")
     dwell_ms:   int = 0
     completion: float = Field(default=0.0, ge=0.0, le=1.0)
 
@@ -289,9 +290,10 @@ def recommend(user_id: str = Query(...)) -> dict[str, Any]:
     sampler = ThompsonSampler(eta=effective_eta)
     raw_ranked = sampler.rank(prefs, virtual_bids=None)
 
-    # Pre-fetch all ads per category (avoids repeated DB round-trips)
+    # Pre-fetch only campaign-linked ads per category
     all_cat_ads: dict[str, list[dict[str, Any]]] = {
-        cat: get_ads_by_category(cat) for cat in CATEGORIES
+        cat: [a for a in get_ads_by_category(cat) if a.get("campaign_id")]
+        for cat in CATEGORIES
     }
 
     best_category = CATEGORIES[0]
@@ -321,17 +323,21 @@ def recommend(user_id: str = Query(...)) -> dict[str, Any]:
             best_category = cat
             ml_score_best = ml_score
 
-    # Cold-start for brand-new users
+    # Cold-start for brand-new users (campaign ads only)
     all_default = all(p["alpha"] == 1.0 and p["beta"] == 1.0 for p in prefs.values())
     if all_default:
-        cold = get_cold_start_ads(limit=5)
+        cold = [a for a in get_cold_start_ads(limit=5) if a.get("campaign_id")]
         filtered = [a for a in cold if a["category"] == best_category]
         ads = filtered or cold
     else:
         ads = all_cat_ads[best_category]
 
     if not ads:
-        raise HTTPException(status_code=404, detail="No ads available")
+        return {
+            "ad_id": "", "category": "organic", "title": "", "thumbnail": "",
+            "score": 0.0, "is_organic": True, "cvr_rate": 0.0,
+            "sampled_at": datetime.now(timezone.utc).isoformat(),
+        }
 
     ad = max(ads, key=lambda a: _fatigue_score(user_id, a["ad_id"]) * random.random())
     freq           = get_user_ad_frequency(user_id, ad["ad_id"])
@@ -343,12 +349,26 @@ def recommend(user_id: str = Query(...)) -> dict[str, Any]:
     )
     _category_ops[best_category].spent_today += bids.get(best_category, 1.0) * s_mult["cpm"]
 
+    # Track per-campaign impression wins
+    campaign_id = ad.get("campaign_id") or ""
+    if campaign_id:
+        _campaign_impression_wins[campaign_id] = _campaign_impression_wins.get(campaign_id, 0) + 1
+
+    # Lookup CVR rate for this ad's campaign
+    cvr_rate = 0.005
+    if campaign_id:
+        cmp = get_campaign(campaign_id)
+        if cmp:
+            cvr_rate = cmp.get("cvr_rate") or 0.005
+
     return {
         "ad_id":    ad["ad_id"],
         "category": ad["category"],
         "title":    ad.get("title", ""),
         "thumbnail": ad.get("thumbnail", ""),
         "score":    round(best_score, 4),
+        "is_organic": False,
+        "cvr_rate": cvr_rate,
         "debug": {
             "pacing_gain":       round(pacing_gains[best_category], 3),
             "effective_eta":     round(effective_eta, 3),
@@ -381,6 +401,12 @@ def receive_event(body: EventLog) -> dict[str, str]:
         step = build_session_step(ad, body.event_type, body.dwell_ms)
         with _session_lock:
             _user_sessions[body.user_id].append(step)
+
+        # Probabilistic purchase on lp_click
+        if body.event_type == "lp_click" and ad.get("campaign_id"):
+            cmp = get_campaign(ad["campaign_id"])
+            if cmp and random.random() < (cmp.get("cvr_rate") or 0.005):
+                log_event(body.user_id, body.ad_id, "purchase", 0, 0.0)
 
     log_event(body.user_id, body.ad_id, body.event_type, body.dwell_ms, body.completion)
     _ml_trainer.notify_new_event()
@@ -621,8 +647,8 @@ def portfolio_simulate(
 
     kpi_data = get_kpi(minutes)
     timeline = kpi_data["timeline"]
-    avg_ctr = sum(p["ctr"]  for p in timeline) / len(timeline) if timeline else 0.05
-    avg_cvr = sum(p["ecvr"] for p in timeline) / len(timeline) if timeline else 0.02
+    avg_ctr = sum(p["ctr"] for p in timeline) / len(timeline) if timeline else 0.025
+    avg_cvr = sum(p["cvr"] for p in timeline) / len(timeline) if timeline else 0.005
     avg_ctr = max(avg_ctr, 0.001)
     avg_cvr = max(avg_cvr, 0.001)
 
@@ -683,6 +709,30 @@ def portfolio_simulate(
         "current_multipliers": s_mult,
         "note": "過去実績ベース近似モデル" if timeline else "実績データなし — デフォルト値使用",
     }
+
+
+# ── /admin/campaigns/impression-share ────────────────────────────────────────
+
+@app.get("/admin/campaigns/impression-share")
+def get_impression_share() -> dict[str, Any]:
+    campaigns = get_all_campaigns()
+    by_category: dict[str, list] = {}
+    for cat in CATEGORIES:
+        cat_camps = [c for c in campaigns if c["category"] == cat and c.get("status") == "active"]
+        if not cat_camps:
+            continue
+        total = sum(_campaign_impression_wins.get(c["campaign_id"], 0) for c in cat_camps)
+        entries = []
+        for c in cat_camps:
+            wins = _campaign_impression_wins.get(c["campaign_id"], 0)
+            entries.append({
+                "campaign_id": c["campaign_id"],
+                "name":        c["name"],
+                "wins":        wins,
+                "share":       round(wins / total, 3) if total > 0 else 0.0,
+            })
+        by_category[cat] = sorted(entries, key=lambda x: x["wins"], reverse=True)
+    return {"by_category": by_category, "total_wins": dict(_campaign_impression_wins)}
 
 
 # ── /health ───────────────────────────────────────────────────────────────────
@@ -820,21 +870,20 @@ def simulate_cpa(body: CpaSimulateRequest) -> dict[str, Any]:
     if body.category not in CATEGORIES:
         raise HTTPException(status_code=400, detail=f"Unknown category: {body.category}")
 
+    from db.crud import CATEGORY_CPM_YEN, DEFAULT_CPM_YEN
     kpi_data = get_kpi(minutes=60)
     timeline = kpi_data["timeline"]
     if timeline:
-        avg_ctr  = sum(p["ctr"]  for p in timeline) / len(timeline)
-        avg_ecvr = sum(p["ecvr"] for p in timeline) / len(timeline)
+        avg_ctr = sum(p["ctr"] for p in timeline) / len(timeline)
+        avg_cvr = sum(p["cvr"] for p in timeline) / len(timeline)
     else:
-        avg_ctr, avg_ecvr = 0.05, 0.02
+        avg_ctr, avg_cvr = 0.025, 0.005
 
-    # Higher bid boosts CTR via more impressions won in auction
+    cpm_yen = CATEGORY_CPM_YEN.get(body.category, DEFAULT_CPM_YEN)
     bid_boost = 1.0 + (body.bid - 1.0) * 0.08
     est_ctr   = min(avg_ctr * bid_boost, 1.0)
-
-    # CPA = cost per conversion; base cost proportional to bid
-    base_cpa = body.bid / (est_ctr * max(avg_ecvr, 0.01))
-    est_cpa  = base_cpa * (1.0 + _competition_level)
+    est_cvr   = max(avg_cvr, 0.001)
+    est_cpa   = cpm_yen / (1000 * est_ctr * est_cvr) * (1.0 + _competition_level)
 
     gap = body.target_cpa - est_cpa
     feasible = gap >= 0
@@ -842,7 +891,7 @@ def simulate_cpa(body: CpaSimulateRequest) -> dict[str, Any]:
     return {
         "estimated_cpa":    round(est_cpa, 0),
         "estimated_ctr":    round(est_ctr, 4),
-        "estimated_ecvr":   round(avg_ecvr, 4),
+        "estimated_cvr":    round(est_cvr, 4),
         "target_cpa":       body.target_cpa,
         "gap":              round(gap, 0),
         "feasible":         feasible,

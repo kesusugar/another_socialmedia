@@ -21,7 +21,7 @@ class AgentState:
     user_id: str
     swipe_count: int = 0
     event_counts: dict[str, int] = field(
-        default_factory=lambda: {"complete": 0, "skip": 0, "like": 0, "impression": 0}
+        default_factory=lambda: {"complete": 0, "skip": 0, "lp_click": 0, "impression": 0, "purchase": 0}
     )
     running: bool = False
     started_at: str = ""
