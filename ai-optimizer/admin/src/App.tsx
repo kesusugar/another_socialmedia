@@ -3,6 +3,7 @@ import { AlgoPanel } from "./components/AlgoPanel";
 import { CannibalizationPanel } from "./components/CannibalizationPanel";
 import { BudgetPanel } from "./components/BudgetPanel";
 import { KpiChart } from "./components/KpiChart";
+import { LiveFeedPanel } from "./components/LiveFeedPanel";
 import { MarketPanel } from "./components/MarketPanel";
 import { MlPanel } from "./components/MlPanel";
 import { PortfolioPanel } from "./components/PortfolioPanel";
@@ -51,6 +52,9 @@ export default function App() {
 
         {/* Row 7: Virtual user agents */}
         <AgentPanel />
+
+        {/* Row 8: Live event feed */}
+        <LiveFeedPanel />
       </main>
     </div>
   );

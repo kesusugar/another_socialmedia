@@ -735,6 +735,27 @@ def get_impression_share() -> dict[str, Any]:
     return {"by_category": by_category, "total_wins": dict(_campaign_impression_wins)}
 
 
+# ── /admin/events/live ───────────────────────────────────────────────────────
+
+@app.get("/admin/events/live")
+def events_live(limit: int = 50, since_id: int = 0) -> list[dict[str, Any]]:
+    with get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT e.id, e.created_at, e.user_id, e.ad_id, e.event_type, e.dwell_ms,
+                   a.title as ad_title, c.name as campaign_name
+            FROM events e
+            JOIN ads a ON e.ad_id = a.ad_id
+            LEFT JOIN campaigns c ON a.campaign_id = c.campaign_id
+            WHERE e.id > ?
+            ORDER BY e.id DESC
+            LIMIT ?
+            """,
+            (since_id, limit),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
 # ── /health ───────────────────────────────────────────────────────────────────
 
 @app.get("/health")
