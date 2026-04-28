@@ -46,6 +46,7 @@ from engine.bayesian import BayesianUpdater
 from engine.bidding import PIDController
 from engine.features import CATEGORIES
 from engine.pacing import PacingEngine
+from engine.seasonality import SeasonalityConfig, SeasonalityEngine
 from engine.thompson import ThompsonSampler
 from ml import MLModelStore, ModelTrainer
 from ml.features import SEQ_LEN, build_ctr_features, build_session_step
@@ -83,6 +84,8 @@ _ml_store   = MLModelStore()
 _ml_trainer = ModelTrainer(_ml_store)
 _server_start: datetime = datetime.now(timezone.utc)
 _agent_runner = AgentRunner()
+_seasonality_engine = SeasonalityEngine()
+_seasonality_config = _seasonality_engine.default_config()
 
 # GRU session cache: {user_id → deque of 10-float step vectors}
 _session_lock: threading.Lock = threading.Lock()
@@ -257,6 +260,16 @@ class CpaSimulateRequest(BaseModel):
     bid_strategy: str   = Field(pattern="^(manual|tcpa|max_delivery)$")
 
 
+class SeasonalityUpdate(BaseModel):
+    cpm_by_hour: list[float] | None = None
+    ctr_by_hour: list[float] | None = None
+    cvr_by_hour: list[float] | None = None
+    cpm_by_dow:  list[float] | None = None
+    ctr_by_dow:  list[float] | None = None
+    cvr_by_dow:  list[float] | None = None
+    enabled:     bool       | None = None
+
+
 # ── /recommend ───────────────────────────────────────────────────────────────
 
 @app.get("/recommend")
@@ -299,7 +312,10 @@ def recommend(user_id: str = Query(...)) -> dict[str, Any]:
         else:
             effective_bid = bids.get(cat, 1.0)
 
-        final_score = raw_sample * effective_bid * pacing * ml_score
+        s_mult = _seasonality_engine.get_multipliers(
+            _seasonality_config, datetime.now(timezone.utc)
+        )
+        final_score = raw_sample * effective_bid * pacing * ml_score * s_mult["ctr"]
         if final_score > best_score:
             best_score    = final_score
             best_category = cat
@@ -322,7 +338,10 @@ def recommend(user_id: str = Query(...)) -> dict[str, Any]:
     fatigue_penalty = round(1.0 - math.exp(-0.3 * freq), 4)
     elasticity_val  = _audience_elasticity(best_category)
 
-    _category_ops[best_category].spent_today += bids.get(best_category, 1.0)
+    s_mult = _seasonality_engine.get_multipliers(
+        _seasonality_config, datetime.now(timezone.utc)
+    )
+    _category_ops[best_category].spent_today += bids.get(best_category, 1.0) * s_mult["cpm"]
 
     return {
         "ad_id":    ad["ad_id"],
@@ -331,13 +350,15 @@ def recommend(user_id: str = Query(...)) -> dict[str, Any]:
         "thumbnail": ad.get("thumbnail", ""),
         "score":    round(best_score, 4),
         "debug": {
-            "pacing_gain":     round(pacing_gains[best_category], 3),
-            "effective_eta":   round(effective_eta, 3),
-            "fatigue_penalty": fatigue_penalty,
-            "elasticity":      round(elasticity_val, 3),
-            "bid_strategy":    _category_ops[best_category].bid_strategy,
-            "model_used":      _ml_strategy,
-            "ml_score":        round(ml_score_best, 4),
+            "pacing_gain":       round(pacing_gains[best_category], 3),
+            "effective_eta":     round(effective_eta, 3),
+            "fatigue_penalty":   fatigue_penalty,
+            "elasticity":        round(elasticity_val, 3),
+            "bid_strategy":      _category_ops[best_category].bid_strategy,
+            "model_used":        _ml_strategy,
+            "ml_score":          round(ml_score_best, 4),
+            "seasonality_ctr":   round(s_mult["ctr"], 4),
+            "seasonality_cpm":   round(s_mult["cpm"], 4),
         },
         "sampled_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -545,6 +566,123 @@ def stop_agents(body: AgentStopRequest) -> dict[str, Any]:
         return {"status": "ok", "stopped": body.agent_id}
     count = _agent_runner.stop_all()
     return {"status": "ok", "stopped_count": count}
+
+
+# ── /admin/seasonality ────────────────────────────────────────────────────────
+
+@app.get("/admin/seasonality")
+def get_seasonality() -> dict[str, Any]:
+    now = datetime.now(timezone.utc)
+    mults = _seasonality_engine.get_multipliers(_seasonality_config, now)
+    return {
+        **_seasonality_config.to_dict(),
+        "current_hour": now.hour,
+        "current_dow": now.weekday(),
+        "current_multipliers": mults,
+    }
+
+
+@app.put("/admin/seasonality")
+def update_seasonality(body: SeasonalityUpdate) -> dict[str, Any]:
+    global _seasonality_config
+    d = _seasonality_config.to_dict()
+    for field_name, val in body.model_dump(exclude_none=True).items():
+        if field_name in d:
+            if isinstance(val, list):
+                expected = 24 if "hour" in field_name else 7
+                if len(val) != expected:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"{field_name} must have {expected} elements",
+                    )
+            d[field_name] = val
+    _seasonality_config = SeasonalityConfig.from_dict(d)
+    return {"status": "ok", **_seasonality_config.to_dict()}
+
+
+@app.post("/admin/seasonality/reset")
+def reset_seasonality() -> dict[str, Any]:
+    global _seasonality_config
+    _seasonality_config = _seasonality_engine.default_config()
+    return {"status": "reset", **_seasonality_config.to_dict()}
+
+
+# ── /admin/portfolio/simulate ─────────────────────────────────────────────────
+
+@app.get("/admin/portfolio/simulate")
+def portfolio_simulate(
+    category:   str   = Query(...),
+    target_cpa: float = Query(..., gt=0),
+    budget:     float = Query(default=10000.0, gt=0),
+    minutes:    int   = Query(default=60, ge=1, le=1440),
+) -> dict[str, Any]:
+    if category not in CATEGORIES:
+        raise HTTPException(status_code=400, detail=f"Unknown category: {category}")
+
+    kpi_data = get_kpi(minutes)
+    timeline = kpi_data["timeline"]
+    avg_ctr = sum(p["ctr"]  for p in timeline) / len(timeline) if timeline else 0.05
+    avg_cvr = sum(p["ecvr"] for p in timeline) / len(timeline) if timeline else 0.02
+    avg_ctr = max(avg_ctr, 0.001)
+    avg_cvr = max(avg_cvr, 0.001)
+
+    s_mult  = _seasonality_engine.get_multipliers(_seasonality_config, datetime.now(timezone.utc))
+    eff_ctr = avg_ctr * s_mult["ctr"]
+    eff_cvr = avg_cvr * s_mult["cvr"]
+
+    # Base CPM estimated from competition & bids
+    bids     = get_virtual_bids()
+    base_bid = bids.get(category, 1.0) * (1 + _competition_level)
+    base_cpm = base_bid * 200 * s_mult["cpm"]   # rough CPM model: bid × 200
+
+    base_cpa = base_cpm / (1000 * max(eff_ctr * eff_cvr, 1e-6))
+
+    results = []
+    best_point = None
+    best_cpa   = float("inf")
+
+    for i in range(11):   # MD ratio 0% → 100% in 10% steps
+        md_ratio = i / 10.0
+        cc_ratio = 1.0 - md_ratio
+
+        # MD: bid=5.0 → wins more auctions, CPM rises ~50%, CTR boost ~20%
+        md_cpm_mult = 1.5
+        md_ctr_mult = 1.2
+        md_cpa  = base_cpa * md_cpm_mult / md_ctr_mult
+        md_imp  = (budget * md_ratio) / max(base_cpm * md_cpm_mult / 1000, 1e-6)
+
+        # CC: target_cpa → ~70% auction win rate, CPA 5% over target
+        cc_win  = 0.7
+        cc_cpa  = target_cpa * 1.05
+        cc_imp  = (budget * cc_ratio * cc_win) / max(base_cpm / 1000, 1e-6)
+
+        p_cpa = md_ratio * md_cpa + cc_ratio * cc_cpa if (md_ratio + cc_ratio) > 0 else cc_cpa
+        p_imp = md_imp + cc_imp
+        p_cv  = p_imp * eff_ctr * eff_cvr
+
+        point = {
+            "md_ratio":      round(md_ratio, 1),
+            "cc_ratio":      round(cc_ratio, 1),
+            "estimated_cpa": round(p_cpa, 0),
+            "estimated_imp": round(p_imp, 0),
+            "estimated_cv":  round(p_cv, 1),
+        }
+        results.append(point)
+
+        if p_cpa < best_cpa:
+            best_cpa   = p_cpa
+            best_point = point
+
+    return {
+        "results":          results,
+        "recommended":      best_point,
+        "base_cpa":         round(base_cpa, 0),
+        "avg_ctr":          round(avg_ctr, 4),
+        "avg_cvr":          round(avg_cvr, 4),
+        "seasonality_active": _seasonality_config.enabled,
+        "current_multipliers": s_mult,
+        "note": "過去実績ベース近似モデル" if timeline else "実績データなし — デフォルト値使用",
+    }
 
 
 # ── /health ───────────────────────────────────────────────────────────────────
