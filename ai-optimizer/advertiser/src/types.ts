@@ -10,7 +10,7 @@ export interface Campaign {
   ad_count?: number;
   total_impressions?: number;
   overall_ctr?: number;
-  overall_cpa?: number;
+  overall_cpa_yen?: number;
 }
 
 export interface Ad {
@@ -29,17 +29,19 @@ export interface KpiPoint {
   minute: string;
   impressions: number;
   ctr: number;
-  ecvr: number;
-  cpa: number;
+  cvr: number;
+  cpa_yen: number;
 }
 
 export interface CampaignKpi {
   timeline: KpiPoint[];
   minutes: number;
   total_impressions: number;
+  total_lp_clicks: number;
   total_conversions: number;
   overall_ctr: number;
-  overall_cpa: number;
+  overall_cvr: number;
+  overall_cpa_yen: number;
 }
 
 export interface AdKpi {

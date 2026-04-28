@@ -39,7 +39,8 @@ function EventBar({ counts }: { counts: Record<string, number> }) {
   return (
     <div className="flex items-center gap-1 text-xs">
       <span className="text-green-400">✓{counts.complete ?? 0}</span>
-      <span className="text-blue-400">♡{counts.like ?? 0}</span>
+      <span className="text-blue-400">LP{counts.lp_click ?? 0}</span>
+      <span className="text-emerald-300">CV{counts.purchase ?? 0}</span>
       <span className="text-red-400">→{counts.skip ?? 0}</span>
       <span className="text-gray-500 ml-1">計{total}</span>
     </div>
@@ -87,6 +88,7 @@ export function AgentPanel() {
   const [personas, setPersonas] = useState<PersonaInfo[]>([]);
   const [selectedPersona, setSelectedPersona] = useState("");
   const [count, setCount] = useState(1);
+  const [bulkCount, setBulkCount] = useState(5);
   const [status, setStatus] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -141,6 +143,28 @@ export function AgentPanel() {
       body: JSON.stringify({ agent_id }),
     });
     void fetchStatus();
+  }
+
+  async function startAllPersonas() {
+    if (personas.length === 0) return;
+    setLoading(true);
+    let total = 0;
+    try {
+      for (const p of personas) {
+        const res = await fetch("/admin/agents/start", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ persona_name: p.name, count: bulkCount }),
+        });
+        const data = await res.json();
+        total += data.started.length;
+      }
+      setStatus(`全ペルソナ ${personas.length}種 × ${bulkCount}台 = ${total}台を起動しました`);
+      setTimeout(() => setStatus(""), 4000);
+      void fetchStatus();
+    } finally {
+      setLoading(false);
+    }
   }
 
   async function stopAll() {
@@ -199,7 +223,7 @@ export function AgentPanel() {
             onChange={(e) => setCount(Number(e.target.value))}
             className="bg-gray-700 rounded px-2 py-1.5 text-sm w-20"
           >
-            {[1, 2, 3, 5, 10].map((n) => (
+            {[1, 2, 3, 5, 10, 20, 50, 100].map((n) => (
               <option key={n} value={n}>{n}台</option>
             ))}
           </select>
@@ -209,6 +233,25 @@ export function AgentPanel() {
             className="bg-indigo-700 hover:bg-indigo-600 disabled:opacity-50 text-white text-sm px-4 py-1.5 rounded"
           >
             起動
+          </button>
+        </div>
+        <div className="flex items-center gap-2 border-t border-gray-700 pt-3">
+          <span className="text-xs text-gray-400 shrink-0">全ペルソナ一括:</span>
+          <select
+            value={bulkCount}
+            onChange={(e) => setBulkCount(Number(e.target.value))}
+            className="bg-gray-700 rounded px-2 py-1.5 text-sm w-20"
+          >
+            {[1, 2, 5, 10, 20, 50].map((n) => (
+              <option key={n} value={n}>{n}台ずつ</option>
+            ))}
+          </select>
+          <button
+            onClick={() => void startAllPersonas()}
+            disabled={loading}
+            className="bg-purple-700 hover:bg-purple-600 disabled:opacity-50 text-white text-sm px-4 py-1.5 rounded"
+          >
+            全ペルソナ起動 ({personas.length}種 × {bulkCount}台)
           </button>
         </div>
 

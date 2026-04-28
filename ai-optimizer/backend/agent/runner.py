@@ -131,11 +131,27 @@ class AgentRunner:
                 )
                 rec.raise_for_status()
                 data = rec.json()
+                is_organic = data.get("is_organic", False)
+
+                state.swipe_count += 1
+
+                if is_organic:
+                    # organic content — no ad event to record
+                    state.last_event_at = datetime.now(timezone.utc).isoformat()
+                    state.error = ""
+                    retries = 0
+                    jitter = persona.swipe_interval_sec * (0.7 + 0.6 * (hash(state.agent_id + str(state.swipe_count)) % 100) / 100)
+                    deadline = time.monotonic() + jitter
+                    while time.monotonic() < deadline and state.running:
+                        time.sleep(0.1)
+                    continue
+
                 ad_id = data["ad_id"]
                 ad_category = data["category"]
+                fatigue_factor = data.get("debug", {}).get("fatigue_penalty", 0.0)
 
                 event_type, dwell_ms, completion = decide_event(
-                    persona, ad_category, state.swipe_count
+                    persona, ad_category, state.swipe_count, fatigue_factor
                 )
 
                 requests.post(
@@ -150,7 +166,6 @@ class AgentRunner:
                     timeout=5,
                 ).raise_for_status()
 
-                state.swipe_count += 1
                 state.event_counts[event_type] = state.event_counts.get(event_type, 0) + 1
                 state.last_event_at = datetime.now(timezone.utc).isoformat()
                 state.error = ""

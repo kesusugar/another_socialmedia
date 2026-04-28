@@ -79,21 +79,25 @@ def decide_event(
     persona: Persona,
     ad_category: str,
     swipe_count: int,
+    fatigue_factor: float = 0.0,
 ) -> tuple[str, int, float]:
     """Return (event_type, dwell_ms, completion)."""
     pref = persona.preferred_categories.get(ad_category, 0.1)
     cycle = swipe_count % 20
     fatigue = max(0.0, 1.0 - persona.fatigue_rate * cycle / 20)
 
+    # creative fatigue: repeated exposure reduces lp_click probability
+    creative_mult = max(0.1, 1.0 - 0.7 * fatigue_factor)
+
     if persona.behavior_style == "binge":
         p_complete = pref * fatigue * 0.65
-        p_like = pref * fatigue * 0.20
+        p_like = pref * fatigue * 0.20 * creative_mult
     elif persona.behavior_style == "picky":
         p_complete = pref * fatigue * 0.50
-        p_like = (pref ** 1.5) * fatigue * 0.35
+        p_like = (pref ** 1.5) * fatigue * 0.35 * creative_mult
     else:  # random
         p_complete = random.uniform(0.05, 0.45)
-        p_like = random.uniform(0.03, 0.18)
+        p_like = random.uniform(0.03, 0.18) * creative_mult
 
     p_complete = min(p_complete, 0.90)
     p_like = min(p_like, 0.50)

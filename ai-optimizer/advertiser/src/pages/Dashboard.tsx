@@ -63,11 +63,11 @@ export function Dashboard() {
           {
             label: "平均CPA",
             value:
-              campaigns.filter((c) => c.overall_cpa).length > 0
+              campaigns.filter((c) => c.overall_cpa_yen).length > 0
                 ? "¥" +
                   Math.round(
-                    campaigns.reduce((s, c) => s + (c.overall_cpa ?? 0), 0) /
-                      campaigns.filter((c) => c.overall_cpa).length
+                    campaigns.reduce((s, c) => s + (c.overall_cpa_yen ?? 0), 0) /
+                      campaigns.filter((c) => c.overall_cpa_yen).length
                   ).toLocaleString()
                 : "—",
           },
@@ -127,7 +127,7 @@ export function Dashboard() {
                 />
                 <MetricCard
                   label="実績CPA"
-                  value={c.overall_cpa ? `¥${c.overall_cpa.toLocaleString()}` : "—"}
+                  value={c.overall_cpa_yen ? `¥${Math.round(c.overall_cpa_yen).toLocaleString()}` : "—"}
                 />
               </div>
             </Link>

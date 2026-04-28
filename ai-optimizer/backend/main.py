@@ -117,7 +117,7 @@ def _audience_elasticity(category: str) -> float:
 
 def _fatigue_score(user_id: str, ad_id: str) -> float:
     freq = get_user_ad_frequency(user_id, ad_id)
-    return math.exp(-0.3 * freq)
+    return math.exp(-0.05 * freq)
 
 
 def _ml_score_for_category(
@@ -213,7 +213,7 @@ class MLStrategyUpdate(BaseModel):
 
 class AgentStartRequest(BaseModel):
     persona_name: str
-    count: int = Field(default=1, ge=1, le=10)
+    count: int = Field(default=1, ge=1, le=200)
 
 
 class AgentStopRequest(BaseModel):
@@ -753,7 +753,7 @@ def list_campaigns() -> list[dict[str, Any]]:
         kpi = get_campaign_kpi(cmp["campaign_id"], minutes=1440)
         cmp["total_impressions"] = kpi["total_impressions"]
         cmp["overall_ctr"] = kpi["overall_ctr"]
-        cmp["overall_cpa"] = kpi["overall_cpa"]
+        cmp["overall_cpa_yen"] = kpi["overall_cpa_yen"]
     return campaigns
 
 
