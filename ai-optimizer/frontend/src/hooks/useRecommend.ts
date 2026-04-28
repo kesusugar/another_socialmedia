@@ -111,6 +111,9 @@ export function useRecommend() {
 
   const advance = useCallback(async () => {
     if (next) {
+      if (!next.is_organic) {
+        void sendEvent(userId, next.ad_id, "impression", 0, 0);
+      }
       setCurrent(next);
       setNext(null);
       setStartTime(Date.now());
@@ -119,6 +122,9 @@ export function useRecommend() {
       setLoading(true);
       try {
         const card = await getNextCard();
+        if (!card.is_organic) {
+          void sendEvent(userId, card.ad_id, "impression", 0, 0);
+        }
         setCurrent(card);
         setStartTime(Date.now());
         void preload();

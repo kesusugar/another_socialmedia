@@ -91,13 +91,13 @@ def decide_event(
 
     if persona.behavior_style == "binge":
         p_complete = pref * fatigue * 0.65
-        p_like = pref * fatigue * 0.20 * creative_mult
+        p_like = pref * fatigue * 0.04 * creative_mult
     elif persona.behavior_style == "picky":
         p_complete = pref * fatigue * 0.50
-        p_like = (pref ** 1.5) * fatigue * 0.35 * creative_mult
+        p_like = (pref ** 1.5) * fatigue * 0.06 * creative_mult
     else:  # random
         p_complete = random.uniform(0.05, 0.45)
-        p_like = random.uniform(0.03, 0.18) * creative_mult
+        p_like = random.uniform(0.005, 0.04) * creative_mult
 
     p_complete = min(p_complete, 0.90)
     p_like = min(p_like, 0.50)

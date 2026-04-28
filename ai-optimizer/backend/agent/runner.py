@@ -150,6 +150,20 @@ class AgentRunner:
                 ad_category = data["category"]
                 fatigue_factor = data.get("debug", {}).get("fatigue_penalty", 0.0)
 
+                # impression event (ad shown to user)
+                requests.post(
+                    f"{self._base}/event",
+                    json={
+                        "user_id": state.user_id,
+                        "ad_id": ad_id,
+                        "event_type": "impression",
+                        "dwell_ms": 0,
+                        "completion": 0.0,
+                    },
+                    timeout=5,
+                ).raise_for_status()
+                state.event_counts["impression"] = state.event_counts.get("impression", 0) + 1
+
                 event_type, dwell_ms, completion = decide_event(
                     persona, ad_category, state.swipe_count, fatigue_factor
                 )
