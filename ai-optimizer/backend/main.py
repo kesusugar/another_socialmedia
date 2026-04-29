@@ -324,12 +324,12 @@ def recommend(user_id: str = Query(...)) -> dict[str, Any]:
             best_category = cat
             ml_score_best = ml_score
 
-    # Cold-start for brand-new users (campaign ads only)
+    # Cold-start for brand-new users
     all_default = all(p["alpha"] == 1.0 and p["beta"] == 1.0 for p in prefs.values())
     if all_default:
         cold = [a for a in get_cold_start_ads(limit=5) if a.get("campaign_id")]
         filtered = [a for a in cold if a["category"] == best_category]
-        ads = filtered or cold
+        ads = filtered or cold or all_cat_ads[best_category]
     else:
         ads = all_cat_ads[best_category]
 
