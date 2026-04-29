@@ -738,22 +738,26 @@ def get_impression_share() -> dict[str, Any]:
 # ── /admin/events/live ───────────────────────────────────────────────────────
 
 @app.get("/admin/events/live")
-def events_live(limit: int = 50, since_id: int = 0) -> list[dict[str, Any]]:
-    with get_conn() as conn:
-        rows = conn.execute(
-            """
-            SELECT e.id, e.created_at, e.user_id, e.ad_id, e.event_type, e.dwell_ms,
-                   a.title as ad_title, c.name as campaign_name
-            FROM events e
-            JOIN ads a ON e.ad_id = a.ad_id
-            LEFT JOIN campaigns c ON a.campaign_id = c.campaign_id
-            WHERE e.id > ?
-            ORDER BY e.id DESC
-            LIMIT ?
-            """,
-            (since_id, limit),
-        ).fetchall()
-        return [{k: row[k] for k in row.keys()} for row in rows]
+def events_live(limit: int = 50, since_id: int = 0):
+    import traceback as _tb
+    try:
+        with get_conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT e.id, e.created_at, e.user_id, e.ad_id, e.event_type, e.dwell_ms,
+                       a.title as ad_title, c.name as campaign_name
+                FROM events e
+                JOIN ads a ON e.ad_id = a.ad_id
+                LEFT JOIN campaigns c ON a.campaign_id = c.campaign_id
+                WHERE e.id > ?
+                ORDER BY e.id DESC
+                LIMIT ?
+                """,
+                (since_id, limit),
+            ).fetchall()
+            return [{k: row[k] for k in row.keys()} for row in rows]
+    except Exception as exc:
+        return {"error": str(exc), "trace": _tb.format_exc()}
 
 
 # ── /health ───────────────────────────────────────────────────────────────────
