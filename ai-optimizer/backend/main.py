@@ -333,6 +333,13 @@ def recommend(user_id: str = Query(...)) -> dict[str, Any]:
     else:
         ads = all_cat_ads[best_category]
 
+    # Fallback: best_category に広告がない場合、ランク順に広告があるカテゴリを探す
+    if not ads:
+        for cat, _ in raw_ranked:
+            if all_cat_ads[cat]:
+                ads = all_cat_ads[cat]
+                break
+
     if not ads:
         return {
             "ad_id": "", "category": "organic", "title": "", "thumbnail": "",
