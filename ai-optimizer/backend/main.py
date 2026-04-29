@@ -753,7 +753,7 @@ def events_live(limit: int = 50, since_id: int = 0) -> list[dict[str, Any]]:
             """,
             (since_id, limit),
         ).fetchall()
-    return [dict(r) for r in rows]
+        return [{k: row[k] for k in row.keys()} for row in rows]
 
 
 # ── /health ───────────────────────────────────────────────────────────────────
