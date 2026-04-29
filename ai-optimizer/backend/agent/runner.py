@@ -72,7 +72,7 @@ class AgentRunner:
         started_ids: list[str] = []
         for _ in range(count):
             agent_id = f"bot_{persona_name}_{uuid.uuid4().hex[:6]}"
-            user_id = f"bot_{persona_name}_{uuid.uuid4().hex[:6]}"
+            user_id = agent_id
             state = AgentState(
                 agent_id=agent_id,
                 persona_name=persona_name,
