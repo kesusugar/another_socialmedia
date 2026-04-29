@@ -8,6 +8,7 @@ export interface Campaign {
   status: string;
   created_at: string;
   ad_count?: number;
+  spent_today?: number;
   total_impressions?: number;
   overall_ctr?: number;
   overall_cpa_yen?: number;

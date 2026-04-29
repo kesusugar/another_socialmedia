@@ -168,7 +168,7 @@ class AgentRunner:
                     persona, ad_category, state.swipe_count, fatigue_factor
                 )
 
-                requests.post(
+                ev_resp = requests.post(
                     f"{self._base}/event",
                     json={
                         "user_id": state.user_id,
@@ -178,9 +178,11 @@ class AgentRunner:
                         "completion": completion,
                     },
                     timeout=5,
-                ).raise_for_status()
-
+                )
+                ev_resp.raise_for_status()
                 state.event_counts[event_type] = state.event_counts.get(event_type, 0) + 1
+                if ev_resp.json().get("purchased"):
+                    state.event_counts["purchase"] = state.event_counts.get("purchase", 0) + 1
                 state.last_event_at = datetime.now(timezone.utc).isoformat()
                 state.error = ""
                 retries = 0

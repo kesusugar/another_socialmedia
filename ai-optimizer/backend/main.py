@@ -411,14 +411,16 @@ def receive_event(body: EventLog) -> dict[str, str]:
             _user_sessions[body.user_id].append(step)
 
         # Probabilistic purchase on lp_click
+        purchased = False
         if body.event_type == "lp_click" and ad.get("campaign_id"):
             cmp = get_campaign(ad["campaign_id"])
             if cmp and random.random() < (cmp.get("cvr_rate") or 0.005):
                 log_event(body.user_id, body.ad_id, "purchase", 0, 0.0)
+                purchased = True
 
     log_event(body.user_id, body.ad_id, body.event_type, body.dwell_ms, body.completion)
     _ml_trainer.notify_new_event()
-    return {"status": "ok"}
+    return {"status": "ok", "purchased": purchased}
 
 
 # ── /user/{id}/profile ────────────────────────────────────────────────────────
@@ -779,6 +781,7 @@ def list_campaigns() -> list[dict[str, Any]]:
     for cmp in campaigns:
         ads = get_ads_by_campaign(cmp["campaign_id"])
         cmp["ad_count"] = len(ads)
+        cmp["spent_today"] = sum(a.get("spent_today", 0.0) for a in ads)
         kpi = get_campaign_kpi(cmp["campaign_id"], minutes=1440)
         cmp["total_impressions"] = kpi["total_impressions"]
         cmp["overall_ctr"] = kpi["overall_ctr"]
@@ -805,7 +808,9 @@ def get_campaign_endpoint(campaign_id: str) -> dict[str, Any]:
     cmp = get_campaign(campaign_id)
     if not cmp:
         raise HTTPException(status_code=404, detail="Campaign not found")
-    cmp["ads"] = get_ads_by_campaign(campaign_id)
+    ads = get_ads_by_campaign(campaign_id)
+    cmp["ads"] = ads
+    cmp["spent_today"] = sum(a.get("spent_today", 0.0) for a in ads)
     return cmp
 
 

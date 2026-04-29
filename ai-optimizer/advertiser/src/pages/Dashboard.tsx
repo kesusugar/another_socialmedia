@@ -15,6 +15,25 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
+function BudgetBar({ spent, budget }: { spent: number; budget: number }) {
+  const pct = budget > 0 ? Math.min((spent / budget) * 100, 100) : 0;
+  const color = pct >= 90 ? "bg-red-500" : pct >= 70 ? "bg-yellow-500" : "bg-green-500";
+  return (
+    <div className="mt-1">
+      <div className="flex justify-between text-xs text-gray-500 mb-1">
+        <span>予算消化</span>
+        <span>
+          ¥{Math.round(spent).toLocaleString()} / ¥{budget.toLocaleString()}
+          {pct >= 100 && <span className="ml-1 text-red-400 font-bold">予算超過</span>}
+        </span>
+      </div>
+      <div className="h-1.5 bg-gray-700 rounded-full overflow-hidden">
+        <div className={`h-full rounded-full transition-all ${color}`} style={{ width: `${pct}%` }} />
+      </div>
+    </div>
+  );
+}
+
 function MetricCard({ label, value }: { label: string; value: string }) {
   return (
     <div className="text-center">
@@ -117,7 +136,7 @@ export function Dashboard() {
                   {STRATEGY_LABELS[c.bid_strategy] ?? c.bid_strategy}
                 </span>
               </div>
-              <div className="grid grid-cols-2 sm:grid-cols-5 gap-4">
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-4 mb-3">
                 <MetricCard label="日予算" value={`¥${c.daily_budget.toLocaleString()}`} />
                 <MetricCard label="目標CPA" value={`¥${c.target_cpa.toLocaleString()}`} />
                 <MetricCard label="広告数" value={String(c.ad_count ?? 0)} />
@@ -130,6 +149,7 @@ export function Dashboard() {
                   value={c.overall_cpa_yen ? `¥${Math.round(c.overall_cpa_yen).toLocaleString()}` : "—"}
                 />
               </div>
+              <BudgetBar spent={c.spent_today ?? 0} budget={c.daily_budget} />
             </Link>
           ))}
         </div>

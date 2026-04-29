@@ -232,6 +232,31 @@ export function CampaignDetail() {
             )}
           </div>
 
+          {/* Budget meter */}
+          {(() => {
+            const spent = campaign.spent_today ?? 0;
+            const pct = campaign.daily_budget > 0 ? Math.min((spent / campaign.daily_budget) * 100, 100) : 0;
+            const color = pct >= 90 ? "bg-red-500" : pct >= 70 ? "bg-yellow-500" : "bg-green-500";
+            return (
+              <div className="bg-gray-900 rounded-2xl p-5 space-y-2">
+                <div className="flex justify-between text-sm">
+                  <span className="font-bold">予算消化</span>
+                  <span className="text-gray-400">{pct.toFixed(1)}%</span>
+                </div>
+                <div className="h-2 bg-gray-700 rounded-full overflow-hidden">
+                  <div className={`h-full rounded-full transition-all ${color}`} style={{ width: `${pct}%` }} />
+                </div>
+                <div className="flex justify-between text-xs text-gray-500">
+                  <span>消化額: ¥{Math.round(spent).toLocaleString()}</span>
+                  <span>日予算: ¥{campaign.daily_budget.toLocaleString()}</span>
+                </div>
+                {pct >= 100 && (
+                  <p className="text-xs text-red-400 font-bold">⚠ 予算超過 — 配信が制限される可能性があります</p>
+                )}
+              </div>
+            );
+          })()}
+
           {/* CPA Simulator */}
           <div className="bg-gray-900 rounded-2xl p-5 space-y-3">
             <h3 className="font-bold text-sm">CPA シミュレーター</h3>
