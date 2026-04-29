@@ -28,6 +28,7 @@ from db.crud import (
     get_campaign_kpi,
     get_cold_start_ads,
     get_category_impression_count,
+    get_conn,
     get_kpi,
     get_recent_cpa_by_category,
     get_user_ad_frequency,
