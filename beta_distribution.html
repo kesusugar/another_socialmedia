@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Beta分布ビジュアライザー — Thompson Sampling</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#0f172a;color:#e2e8f0;font-family:'Segoe UI',system-ui,sans-serif;padding:1.5rem;min-height:100vh}
+h1{font-size:1.25rem;font-weight:700;color:#f1f5f9;margin-bottom:1.25rem;display:flex;align-items:center;gap:.5rem}
+.layout{display:grid;grid-template-columns:270px 1fr;gap:1.25rem;max-width:1000px}
+.card{background:#1e293b;border-radius:12px;padding:1.2rem}
+h2{font-size:.75rem;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.08em;margin-bottom:1rem}
+.sg{margin-bottom:1rem}
+.sg label{display:flex;justify-content:space-between;align-items:center;font-size:.8rem;color:#94a3b8;margin-bottom:.4rem}
+.sv{color:#60a5fa;font-weight:700;font-variant-numeric:tabular-nums}
+input[type=range]{width:100%;accent-color:#3b82f6;cursor:pointer;height:4px}
+.params{display:grid;grid-template-columns:1fr 1fr;gap:.3rem .75rem;font-size:.8rem;margin-top:.75rem;padding:.75rem;background:#0f172a;border-radius:8px}
+.pk{color:#94a3b8}.pv{font-weight:700;color:#f1f5f9;font-variant-numeric:tabular-nums}
+.btns{display:flex;flex-direction:column;gap:.45rem;margin-top:1rem}
+button{padding:.5rem .9rem;border-radius:8px;border:none;cursor:pointer;font-size:.82rem;font-weight:600;transition:all .15s;width:100%;text-align:left;display:flex;align-items:center;gap:.4rem}
+.bp{background:#2563eb;color:#fff}.bp:hover{background:#1d4ed8}
+.bs{background:#334155;color:#cbd5e1}.bs:hover{background:#475569}
+.bg{background:#064e3b;color:#6ee7b7;border:1px solid #065f46}.bg:hover{background:#065f46}
+.bg.running{background:#065f46;border-color:#059669}
+.status{padding:.7rem 1rem;border-radius:8px;font-size:.83rem;font-weight:600;margin-bottom:.85rem;line-height:1.4;transition:background .3s,color .3s,border-color .3s}
+.sd{background:#450a0a;color:#f87171;border:1px solid #b91c1c}
+.sw{background:#431407;color:#fbbf24;border:1px solid #b45309}
+.ss{background:#052e16;color:#4ade80;border:1px solid #15803d}
+canvas{display:block;background:#0f172a;border-radius:8px;max-width:100%}
+.fbox{margin-top:1rem;background:#0f172a;border-radius:8px;padding:1rem}
+.ft{font-size:.75rem;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin-bottom:.6rem}
+.fe{font-family:'Courier New',monospace;color:#7dd3fc;font-size:.8rem;line-height:1.6;margin:.1rem 0}
+.fv{margin-top:.8rem;display:grid;grid-template-columns:1fr 1fr;gap:.3rem .5rem;font-size:.8rem}
+.fk{color:#94a3b8}.fval{font-weight:700;color:#f1f5f9;font-variant-numeric:tabular-nums}
+.legend{display:flex;gap:1rem;font-size:.75rem;margin-top:.6rem;flex-wrap:wrap}
+.leg{display:flex;align-items:center;gap:.35rem;color:#94a3b8}
+.leg-dot{width:12px;height:3px;border-radius:2px}
+</style>
+</head>
+<body>
+<h1>🎯 Thompson Sampling — Beta分布ビジュアライザー</h1>
+<div class="layout">
+  <!-- Controls -->
+  <div>
+    <div class="card">
+      <h2>パラメータ</h2>
+      <div class="sg">
+        <label>CV数（成功） <span class="sv" id="cvV">0</span> 件</label>
+        <input type="range" id="cvS" min="0" max="100" value="0">
+      </div>
+      <div class="sg">
+        <label>失敗数（CV非発生） <span class="sv" id="failV">10</span> 件</label>
+        <input type="range" id="failS" min="0" max="500" value="10">
+      </div>
+      <div class="params">
+        <span class="pk">α = CV + 1</span><span class="pv" id="aV" style="color:#f472b6">1</span>
+        <span class="pk">β = 失敗 + 1</span><span class="pv" id="bV" style="color:#34d399">11</span>
+      </div>
+      <div class="btns">
+        <button class="bp" id="addCv"><span>＋</span>CV を 1件追加</button>
+        <button class="bs" id="addF"><span>＋</span>失敗 を 1件追加</button>
+        <button class="bs" id="rst"><span>↺</span>リセット（Beta(1,1)）</button>
+        <button class="bg" id="anim"><span>▶</span>アニメ再生 (CV: 0 → 50)</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Charts -->
+  <div>
+    <div class="card" style="margin-bottom:1rem">
+      <div id="sm" class="status sd">🔴 探索必須 — CV=0件。分布が平坦でどのCTRも等確率。アルゴリズムは実質ランダム配信中。</div>
+      <canvas id="bc" width="600" height="290"></canvas>
+      <div class="legend">
+        <div class="leg"><div class="leg-dot" style="background:#3b82f6;height:10px;border-radius:3px;opacity:.5"></div>確率密度 f(θ)</div>
+        <div class="leg"><div class="leg-dot" style="background:#facc15"></div>平均 E[θ]</div>
+        <div class="leg"><div class="leg-dot" style="background:#94a3b8;opacity:.5;border-top:1px dashed #94a3b8"></div>95% CI</div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="fbox">
+        <div class="ft">📐 Beta分布の確率密度関数</div>
+        <div class="fe">f(θ; α, β) = θ^(α−1) · (1−θ)^(β−1) / B(α, β)</div>
+        <div class="fe">B(α, β) = Γ(α) · Γ(β) / Γ(α + β)　　← 正規化定数</div>
+        <div class="fe">更新則: CVあり → α ← α+1,　CVなし → β ← β+1</div>
+        <div class="fv">
+          <span class="fk">α（成功 + 事前）</span><span class="fval" id="fa">1</span>
+          <span class="fk">β（失敗 + 事前）</span><span class="fval" id="fb">11</span>
+          <span class="fk">平均 E[θ] = α/(α+β)</span><span class="fval" id="fm">—</span>
+          <span class="fk">最頻値 = (α−1)/(α+β−2)</span><span class="fval" id="fo">—</span>
+          <span class="fk">95% ベイズ信頼区間</span><span class="fval" id="fci">—</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── Lanczos logGamma（数値安定版） ──────────────────────────
+function logGamma(z) {
+  if (z < 0.5) return Math.log(Math.PI / Math.sin(Math.PI * z)) - logGamma(1 - z);
+  z -= 1;
+  const c = [
+    0.99999999999980993, 676.5203681218851, -1259.1392167224028,
+    771.32342877765313, -176.61502916214059, 12.507343278686905,
+    -0.13857109526572012, 9.9843695780195716e-6, 1.5056327351493116e-7
+  ];
+  let x = c[0];
+  for (let i = 1; i < 9; i++) x += c[i] / (z + i);
+  const t = z + 7.5;
+  return 0.5 * Math.log(2 * Math.PI) + (z + 0.5) * Math.log(t) - t + Math.log(x);
+}
+
+function betaPDF(x, a, b) {
+  if (x <= 0 || x >= 1) return 0;
+  const lv = (a - 1) * Math.log(x) + (b - 1) * Math.log(1 - x)
+           - (logGamma(a) + logGamma(b) - logGamma(a + b));
+  return isFinite(lv) ? Math.exp(lv) : 0;
+}
+
+// 95% ベイズ信頼区間を台形則で近似計算
+function computeCI(a, b) {
+  const N = 1200;
+  const ys = [];
+  let sum = 0;
+  for (let i = 1; i <= N; i++) {
+    const v = betaPDF(i / (N + 1), a, b);
+    ys.push(v);
+    sum += v;
+  }
+  const dx = 1 / (N + 1);
+  let cdf = 0, lo = 0.025, hi = 0.975, foundLo = false;
+  for (let i = 0; i < N; i++) {
+    cdf += ys[i] / sum;
+    if (!foundLo && cdf >= 0.025) { lo = (i + 1) / (N + 1); foundLo = true; }
+    if (cdf >= 0.975) { hi = (i + 1) / (N + 1); break; }
+  }
+  return [lo, hi];
+}
+
+// ── State ────────────────────────────────────────────────────
+let cv = 0, fail = 10, animTimer = null;
+const canvas = document.getElementById('bc');
+const ctx = canvas.getContext('2d');
+
+// ── Canvas Drawing ───────────────────────────────────────────
+function draw() {
+  const a = cv + 1, b = fail + 1;
+  const W = canvas.width, H = canvas.height;
+  const ml = 54, mr = 16, mt = 28, mb = 46;
+  const pw = W - ml - mr, ph = H - mt - mb;
+
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = '#0f172a';
+  ctx.fillRect(0, 0, W, H);
+
+  // PDF を計算
+  const N = 500;
+  const xs = [], ys = [];
+  for (let i = 1; i < N; i++) {
+    const x = i / N;
+    xs.push(x);
+    ys.push(betaPDF(x, a, b));
+  }
+  const maxY = Math.max(...ys, 0.8);
+
+  const cxf = x => ml + x * pw;
+  const cyf = y => mt + ph - (y / maxY) * ph * 0.9;
+
+  // グリッド
+  ctx.strokeStyle = '#1e293b';
+  ctx.lineWidth = 0.5;
+  for (let i = 0; i <= 10; i++) {
+    ctx.beginPath();
+    ctx.moveTo(cxf(i / 10), mt);
+    ctx.lineTo(cxf(i / 10), mt + ph);
+    ctx.stroke();
+  }
+  for (let i = 0; i <= 4; i++) {
+    const y = maxY * i / 4;
+    ctx.beginPath();
+    ctx.moveTo(ml, cyf(y));
+    ctx.lineTo(ml + pw, cyf(y));
+    ctx.stroke();
+  }
+
+  // 95% CI 領域
+  const [lo, hi] = computeCI(a, b);
+  ctx.fillStyle = 'rgba(59,130,246,0.10)';
+  ctx.beginPath();
+  ctx.moveTo(cxf(lo), cyf(0));
+  for (let i = 0; i < xs.length; i++) {
+    if (xs[i] >= lo && xs[i] <= hi) ctx.lineTo(cxf(xs[i]), cyf(ys[i]));
+  }
+  ctx.lineTo(cxf(hi), cyf(0));
+  ctx.closePath();
+  ctx.fill();
+
+  // PDF 塗りつぶし
+  ctx.fillStyle = 'rgba(59,130,246,0.22)';
+  ctx.beginPath();
+  ctx.moveTo(cxf(xs[0]), cyf(0));
+  xs.forEach((x, i) => ctx.lineTo(cxf(x), cyf(ys[i])));
+  ctx.lineTo(cxf(xs[xs.length - 1]), cyf(0));
+  ctx.closePath();
+  ctx.fill();
+
+  // PDF 曲線
+  ctx.beginPath();
+  xs.forEach((x, i) => {
+    if (i === 0) ctx.moveTo(cxf(x), cyf(ys[i]));
+    else ctx.lineTo(cxf(x), cyf(ys[i]));
+  });
+  ctx.strokeStyle = '#3b82f6';
+  ctx.lineWidth = 2.5;
+  ctx.stroke();
+
+  // 平均値の縦線
+  const mean = a / (a + b);
+  ctx.setLineDash([6, 4]);
+  ctx.beginPath();
+  ctx.moveTo(cxf(mean), mt);
+  ctx.lineTo(cxf(mean), mt + ph);
+  ctx.strokeStyle = '#facc15';
+  ctx.lineWidth = 1.8;
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // CI 境界線
+  for (const v of [lo, hi]) {
+    ctx.setLineDash([3, 4]);
+    ctx.beginPath();
+    ctx.moveTo(cxf(v), mt);
+    ctx.lineTo(cxf(v), mt + ph);
+    ctx.strokeStyle = 'rgba(148,163,184,0.35)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  // 軸線
+  ctx.strokeStyle = '#475569';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(ml, mt); ctx.lineTo(ml, mt + ph);
+  ctx.moveTo(ml, mt + ph); ctx.lineTo(ml + pw, mt + ph);
+  ctx.stroke();
+
+  // X 軸ラベル
+  ctx.fillStyle = '#64748b';
+  ctx.font = '10px monospace';
+  ctx.textAlign = 'center';
+  for (const v of [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]) {
+    ctx.fillText(v.toFixed(1), cxf(v), mt + ph + 15);
+  }
+
+  // Y 軸ラベル
+  ctx.textAlign = 'right';
+  for (let i = 0; i <= 4; i++) {
+    const y = maxY * i / 4;
+    ctx.fillText(y >= 10 ? Math.round(y) : y.toFixed(1), ml - 5, cyf(y) + 4);
+  }
+
+  // 軸タイトル
+  ctx.fillStyle = '#475569';
+  ctx.font = '11px system-ui';
+  ctx.textAlign = 'center';
+  ctx.fillText('θ（真のCTR）', ml + pw / 2, mt + ph + 32);
+  ctx.save();
+  ctx.translate(14, mt + ph / 2);
+  ctx.rotate(-Math.PI / 2);
+  ctx.fillText('確率密度 f(θ)', 0, 0);
+  ctx.restore();
+
+  // 平均ラベル
+  ctx.fillStyle = '#facc15';
+  ctx.font = 'bold 10px monospace';
+  ctx.textAlign = mean > 0.5 ? 'right' : 'left';
+  ctx.fillText('μ=' + mean.toFixed(3), cxf(mean) + (mean > 0.5 ? -5 : 5), mt + 16);
+
+  // タイトル
+  ctx.fillStyle = '#cbd5e1';
+  ctx.font = 'bold 12px system-ui';
+  ctx.textAlign = 'center';
+  ctx.fillText(`Beta(α=${a},  β=${b})`, ml + pw / 2, mt - 9);
+
+  // 情報パネル更新
+  document.getElementById('fa').textContent = a;
+  document.getElementById('fb').textContent = b;
+  document.getElementById('fm').textContent = mean.toFixed(5);
+  document.getElementById('fo').textContent =
+    (a > 1 && b > 1) ? ((a - 1) / (a + b - 2)).toFixed(5) : '（定義なし）';
+  document.getElementById('fci').textContent =
+    `[${lo.toFixed(4)},  ${hi.toFixed(4)}]  幅 ${(hi - lo).toFixed(4)}`;
+}
+
+// ── ステータスメッセージ ────────────────────────────────────
+function updateStatus() {
+  const el = document.getElementById('sm');
+  if (cv < 10) {
+    el.className = 'status sd';
+    el.textContent = `🔴 探索必須 — CV=${cv}件。Beta(${cv+1},${fail+1})の分布が広く、どのCTRも同様に可能性あり。アルゴリズムはほぼランダム配信中。`;
+  } else if (cv < 50) {
+    el.className = 'status sw';
+    el.textContent = `🟡 探索継続中 — CV=${cv}件。分布の形が見えてきたが95%CIの幅がまだ広い。さらにデータが必要。`;
+  } else {
+    el.className = 'status ss';
+    el.textContent = `🟢 探索不要 — CV=${cv}件。分布が収束し最良腕が統計的に確定。アルゴリズムは高CTR腕を確実に選択中。`;
+  }
+}
+
+// ── UI 同期 ──────────────────────────────────────────────────
+function sync() {
+  document.getElementById('cvS').value = cv;
+  document.getElementById('failS').value = fail;
+  document.getElementById('cvV').textContent = cv;
+  document.getElementById('failV').textContent = fail;
+  document.getElementById('aV').textContent = cv + 1;
+  document.getElementById('bV').textContent = fail + 1;
+  updateStatus();
+  draw();
+}
+
+// ── イベントハンドラー ────────────────────────────────────────
+document.getElementById('cvS').oninput = e => { cv = +e.target.value; sync(); };
+document.getElementById('failS').oninput = e => { fail = +e.target.value; sync(); };
+document.getElementById('addCv').onclick = () => { if (cv < 100) { cv++; sync(); } };
+document.getElementById('addF').onclick = () => { if (fail < 500) { fail++; sync(); } };
+document.getElementById('rst').onclick = () => {
+  stopAnim();
+  cv = 0; fail = 10;
+  sync();
+};
+
+function stopAnim() {
+  if (animTimer) {
+    clearInterval(animTimer);
+    animTimer = null;
+    const btn = document.getElementById('anim');
+    btn.innerHTML = '<span>▶</span>アニメ再生 (CV: 0 → 50)';
+    btn.className = 'bg';
+  }
+}
+
+document.getElementById('anim').onclick = () => {
+  if (animTimer) { stopAnim(); return; }
+  cv = 0; fail = 10; sync();
+  const btn = document.getElementById('anim');
+  btn.innerHTML = '<span>⏸</span>停止';
+  btn.className = 'bg running';
+  animTimer = setInterval(() => {
+    if (cv >= 50) { stopAnim(); return; }
+    cv++;
+    // 失敗数もCVに応じて増加（CTR ≈ 11%を想定）
+    fail = Math.max(10, Math.round(cv * 8));
+    sync();
+  }, 130);
+};
+
+// ── 初期描画 ─────────────────────────────────────────────────
+sync();
+</script>
+</body>
+</html>

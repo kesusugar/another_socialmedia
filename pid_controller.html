@@ -1,0 +1,522 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>tCPA PID コントローラー シミュレーター</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#0f172a;color:#e2e8f0;font-family:'Segoe UI',system-ui,sans-serif;padding:1.5rem;min-height:100vh}
+h1{font-size:1.25rem;font-weight:700;color:#f1f5f9;margin-bottom:1.25rem}
+.layout{display:grid;grid-template-columns:300px 1fr;gap:1.25rem;max-width:1050px}
+.card{background:#1e293b;border-radius:12px;padding:1.2rem}
+h2{font-size:.75rem;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.08em;margin-bottom:1rem}
+.sg{margin-bottom:1rem}
+.sg label{display:flex;justify-content:space-between;font-size:.8rem;color:#94a3b8;margin-bottom:.4rem}
+.sv{font-weight:700;font-variant-numeric:tabular-nums}
+.sv-t{color:#22c55e}.sv-kp{color:#fb923c}.sv-ki{color:#a78bfa}.sv-kd{color:#34d399}
+input[type=range]{width:100%;accent-color:#3b82f6;cursor:pointer;height:4px}
+.hint{font-size:.72rem;color:#475569;margin-top:.3rem}
+.btns{display:flex;flex-direction:column;gap:.45rem;margin-top:1rem}
+button{padding:.5rem .9rem;border-radius:8px;border:none;cursor:pointer;font-size:.82rem;font-weight:600;transition:all .15s;width:100%;text-align:left;display:flex;align-items:center;gap:.45rem}
+.bp{background:#2563eb;color:#fff}.bp:hover{background:#1d4ed8}
+.bs{background:#334155;color:#cbd5e1}.bs:hover{background:#475569}
+.bsp{background:#7f1d1d;color:#fca5a5;border:1px solid #b91c1c}.bsp:hover{background:#991b1b}
+.bp.running{background:#1d4ed8}
+.fbox{margin-top:1rem;background:#0f172a;border-radius:8px;padding:1rem;min-height:180px}
+.ft{font-size:.72rem;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin-bottom:.6rem}
+.fval-wrap{font-family:'Courier New',monospace;font-size:.77rem;line-height:1.75;color:#94a3b8}
+.fval-wrap .hi-cpa{color:#f472b6;font-weight:700}
+.fval-wrap .hi-t{color:#22c55e;font-weight:700}
+.fval-wrap .hi-err{font-weight:700}
+.fval-wrap .pos{color:#f87171}
+.fval-wrap .neg{color:#4ade80}
+.fval-wrap .hi-p{color:#fb923c;font-weight:700}
+.fval-wrap .hi-i{color:#a78bfa;font-weight:700}
+.fval-wrap .hi-d{color:#34d399;font-weight:700}
+.fval-wrap .hi-u{color:#fbbf24;font-weight:700;font-size:.9rem}
+.fval-wrap .hi-bid{color:#60a5fa;font-weight:700}
+.fval-wrap .spiral{color:#f87171;font-weight:700}
+.fval-wrap .dim{color:#475569}
+.spiral-alert{background:#450a0a;border:1px solid #b91c1c;border-radius:8px;padding:.75rem 1rem;font-size:.83rem;color:#f87171;font-weight:600;margin-bottom:.85rem;display:none;line-height:1.4}
+.spiral-alert.show{display:block}
+canvas{display:block;background:#0f172a;border-radius:8px;max-width:100%}
+.chart-title{font-size:.78rem;font-weight:600;color:#64748b;margin-bottom:.5rem}
+.legend{display:flex;gap:.85rem;font-size:.73rem;margin-top:.5rem;flex-wrap:wrap}
+.leg{display:flex;align-items:center;gap:.3rem;color:#94a3b8}
+.leg-line{width:14px;height:2.5px;border-radius:2px}
+.model-note{background:#0f172a;border-radius:8px;padding:.85rem 1rem;font-size:.77rem;color:#64748b;margin-top:.85rem;line-height:1.6}
+.model-note strong{color:#94a3b8}
+</style>
+</head>
+<body>
+<h1>🎛️ tCPA — PID コントローラー シミュレーター</h1>
+<div class="layout">
+  <!-- 左: コントロール -->
+  <div>
+    <div class="card">
+      <h2>パラメータ設定</h2>
+      <div class="sg">
+        <label>目標CPA <span class="sv sv-t" id="tV">¥1,000</span></label>
+        <input type="range" id="tS" min="100" max="3000" step="50" value="1000">
+        <div class="hint">初期入札 2.5 → 初期実績CPA ≈ ¥1,897</div>
+      </div>
+      <div class="sg">
+        <label>K<sub>p</sub>（比例ゲイン） <span class="sv sv-kp" id="kpV">0.30</span></label>
+        <input type="range" id="kpS" min="0" max="2" step="0.05" value="0.3">
+      </div>
+      <div class="sg">
+        <label>K<sub>i</sub>（積分ゲイン） <span class="sv sv-ki" id="kiV">0.050</span></label>
+        <input type="range" id="kiS" min="0" max="0.3" step="0.005" value="0.05">
+      </div>
+      <div class="sg">
+        <label>K<sub>d</sub>（微分ゲイン） <span class="sv sv-kd" id="kdV">0.10</span></label>
+        <input type="range" id="kdS" min="0" max="1" step="0.01" value="0.1">
+      </div>
+      <div class="btns">
+        <button class="bp" id="runBtn">▶ シミュレーション実行</button>
+        <button class="bs" id="rstBtn">↺ リセット（デフォルト値）</button>
+        <button class="bsp" id="spiralBtn">⚠ 低入札スパイラルモード</button>
+      </div>
+      <!-- ライブ数式パネル -->
+      <div class="fbox">
+        <div class="ft">📐 PID 公式 — ライブ値</div>
+        <div class="fval-wrap" id="flive">
+          <span class="dim">— シミュレーション実行後に<br>ステップごとの計算値が<br>ここに表示されます —</span>
+        </div>
+      </div>
+    </div>
+    <div class="model-note">
+      <strong>シミュレーションモデル</strong><br>
+      natural_CPA = 1200 × √bid<br>
+      bid=2.5 → CPA≈¥1,897　bid=1.0 → CPA≈¥1,200<br>
+      bid=0.5 → CPA≈¥849（到達可能な最低CPA）<br>
+      目標 &lt; ¥849 ではスパイラルが発生します
+    </div>
+  </div>
+
+  <!-- 右: チャート -->
+  <div>
+    <div id="saAlert" class="spiral-alert"></div>
+    <div class="card" style="margin-bottom:1rem">
+      <div class="chart-title">実績CPA vs 目標CPA</div>
+      <canvas id="cpaC" width="620" height="230"></canvas>
+      <div class="legend">
+        <div class="leg"><div class="leg-line" style="background:#f472b6"></div>実績CPA</div>
+        <div class="leg"><div class="leg-line" style="background:#22c55e;border-top:2px dashed #22c55e"></div>目標CPA</div>
+      </div>
+    </div>
+    <div class="card" style="margin-bottom:1rem">
+      <div class="chart-title">入札額（bid）の推移　[ 0.5 〜 5.0 ]</div>
+      <canvas id="bidC" width="620" height="150"></canvas>
+      <div class="legend">
+        <div class="leg"><div class="leg-line" style="background:#60a5fa"></div>bid</div>
+        <div class="leg"><div class="leg-line" style="background:#ef4444;opacity:.5"></div>最低入札 0.5</div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="chart-title">PID 成分の推移（P・I・D）</div>
+      <canvas id="pidC" width="620" height="150"></canvas>
+      <div class="legend">
+        <div class="leg"><div class="leg-line" style="background:#fb923c"></div>P = Kp·e(t)</div>
+        <div class="leg"><div class="leg-line" style="background:#a78bfa"></div>I = Ki·∫e dt</div>
+        <div class="leg"><div class="leg-line" style="background:#34d399"></div>D = Kd·de/dt</div>
+        <div class="leg"><div class="leg-line" style="background:#fbbf24"></div>u(t) = P+I+D</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── シミュレーション ──────────────────────────────────────────
+function runSim(target, kp, ki, kd) {
+  const BASE = 1200, INIT_BID = 2.5, STEPS = 70;
+  let bid = INIT_BID, integral = 0, prevErr = 0;
+
+  // 再現性のある LCG 乱数
+  let seed = 98765;
+  const rng = () => {
+    seed = (Math.imul(1664525, seed) + 1013904223) | 0;
+    return ((seed >>> 0) / 4294967296);
+  };
+
+  const hist = [];
+  for (let t = 0; t < STEPS; t++) {
+    const natCpa = BASE * Math.sqrt(bid);
+    const noise = (rng() - 0.5) * natCpa * 0.07;
+    const actual = Math.max(10, natCpa + noise);
+
+    const err = actual - target;
+    integral += err;
+    const rawD = err - prevErr;  // de/dt の近似
+    prevErr = err;
+
+    const P = kp * err;
+    const I = ki * integral;
+    const D = kd * rawD;
+    const u = P + I + D;
+
+    // 次ステップへのbid更新
+    const nextBid = Math.max(0.5, Math.min(5.0, bid - u * 0.0005));
+
+    hist.push({ t, actual, bid, err, integral, rawD, P, I, D, u, nextBid });
+    bid = nextBid;
+  }
+  return hist;
+}
+
+// ── チャート描画共通 ──────────────────────────────────────────
+function clearCanvas(canvas) {
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#0f172a';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  return ctx;
+}
+
+function drawGrid(ctx, ml, mr, mt, mb, W, H, yTicks) {
+  const pw = W - ml - mr, ph = H - mt - mb;
+  ctx.strokeStyle = '#1e293b';
+  ctx.lineWidth = 0.5;
+  for (const y of yTicks) {
+    const cy = mt + ph - (y.frac) * ph * 0.9;
+    ctx.beginPath(); ctx.moveTo(ml, cy); ctx.lineTo(ml + pw, cy); ctx.stroke();
+  }
+  for (let i = 0; i <= 7; i++) {
+    const x = ml + (i / 7) * pw;
+    ctx.beginPath(); ctx.moveTo(x, mt); ctx.lineTo(x, mt + ph); ctx.stroke();
+  }
+}
+
+function drawAxes(ctx, ml, mr, mt, mb, W, H) {
+  const pw = W - ml - mr, ph = H - mt - mb;
+  ctx.strokeStyle = '#475569'; ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(ml, mt); ctx.lineTo(ml, mt + ph);
+  ctx.moveTo(ml, mt + ph); ctx.lineTo(ml + pw, mt + ph);
+  ctx.stroke();
+}
+
+// ── CPA チャート ─────────────────────────────────────────────
+function drawCpaChart(hist, step, target) {
+  const canvas = document.getElementById('cpaC');
+  const W = canvas.width, H = canvas.height;
+  const ml = 68, mr = 16, mt = 24, mb = 38;
+  const pw = W - ml - mr, ph = H - mt - mb;
+  const ctx = clearCanvas(canvas);
+  const N = hist.length;
+
+  const allCpa = hist.map(h => h.actual);
+  const maxCpa = Math.max(...allCpa, target * 1.5, 1200) * 1.05;
+
+  const cxf = t => ml + (t / (N - 1)) * pw;
+  const cyf = v => mt + ph - (v / maxCpa) * ph * 0.9;
+
+  // グリッド
+  const yTicks = [0, 0.25, 0.5, 0.75, 1.0].map(f => ({ frac: f, val: maxCpa * f }));
+  ctx.strokeStyle = '#1e293b'; ctx.lineWidth = 0.5;
+  for (const { frac } of yTicks) {
+    const y = mt + ph - frac * ph * 0.9;
+    ctx.beginPath(); ctx.moveTo(ml, y); ctx.lineTo(ml + pw, y); ctx.stroke();
+  }
+
+  // 目標CPA 横破線
+  ctx.setLineDash([8, 5]);
+  ctx.beginPath();
+  ctx.moveTo(ml, cyf(target)); ctx.lineTo(ml + pw, cyf(target));
+  ctx.strokeStyle = '#22c55e'; ctx.lineWidth = 1.5; ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.fillStyle = '#22c55e'; ctx.font = 'bold 10px system-ui'; ctx.textAlign = 'right';
+  ctx.fillText(`目標 ¥${target.toLocaleString()}`, ml + pw - 4, cyf(target) - 5);
+
+  // CPA 曲線（step まで描画）
+  const vis = hist.slice(0, step + 1);
+  if (vis.length >= 2) {
+    // 塗りつぶし
+    ctx.fillStyle = 'rgba(244,114,182,0.08)';
+    ctx.beginPath();
+    ctx.moveTo(cxf(vis[0].t), cyf(vis[0].actual));
+    vis.forEach(h => ctx.lineTo(cxf(h.t), cyf(h.actual)));
+    ctx.lineTo(cxf(vis[vis.length - 1].t), cyf(0));
+    ctx.lineTo(cxf(vis[0].t), cyf(0));
+    ctx.closePath(); ctx.fill();
+    // 曲線
+    ctx.beginPath();
+    vis.forEach((h, i) => {
+      if (i === 0) ctx.moveTo(cxf(h.t), cyf(h.actual));
+      else ctx.lineTo(cxf(h.t), cyf(h.actual));
+    });
+    ctx.strokeStyle = '#f472b6'; ctx.lineWidth = 2.2; ctx.stroke();
+  }
+
+  // 現在点
+  if (step < hist.length) {
+    const h = hist[step];
+    ctx.beginPath(); ctx.arc(cxf(h.t), cyf(h.actual), 4.5, 0, Math.PI * 2);
+    ctx.fillStyle = '#f472b6'; ctx.fill();
+  }
+
+  drawAxes(ctx, ml, mr, mt, mb, W, H);
+
+  // Y ラベル
+  ctx.fillStyle = '#64748b'; ctx.font = '10px monospace'; ctx.textAlign = 'right';
+  for (const { frac, val } of yTicks) {
+    const y = mt + ph - frac * ph * 0.9;
+    ctx.fillText('¥' + Math.round(val).toLocaleString(), ml - 4, y + 4);
+  }
+  // X ラベル
+  ctx.textAlign = 'center';
+  for (let i = 0; i <= 7; i++) {
+    ctx.fillText('t=' + Math.round(i / 7 * (N - 1)), ml + (i / 7) * pw, mt + ph + 16);
+  }
+}
+
+// ── Bid チャート ─────────────────────────────────────────────
+function drawBidChart(hist, step) {
+  const canvas = document.getElementById('bidC');
+  const W = canvas.width, H = canvas.height;
+  const ml = 44, mr = 16, mt = 20, mb = 32;
+  const pw = W - ml - mr, ph = H - mt - mb;
+  const ctx = clearCanvas(canvas);
+  const N = hist.length;
+
+  const cxf = t => ml + (t / (N - 1)) * pw;
+  const cyf = v => mt + ph - ((v - 0.4) / 4.7) * ph * 0.92;
+
+  // グリッド
+  ctx.strokeStyle = '#1e293b'; ctx.lineWidth = 0.5;
+  for (const v of [0.5, 1, 2, 3, 4, 5]) {
+    ctx.beginPath(); ctx.moveTo(ml, cyf(v)); ctx.lineTo(ml + pw, cyf(v)); ctx.stroke();
+  }
+
+  // 最低入札 0.5 ライン
+  ctx.setLineDash([5, 4]);
+  ctx.beginPath(); ctx.moveTo(ml, cyf(0.5)); ctx.lineTo(ml + pw, cyf(0.5));
+  ctx.strokeStyle = 'rgba(239,68,68,0.45)'; ctx.lineWidth = 1.2; ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.fillStyle = 'rgba(239,68,68,0.5)'; ctx.font = '9px system-ui'; ctx.textAlign = 'left';
+  ctx.fillText('最低入札 0.5', ml + 5, cyf(0.5) - 4);
+
+  // bid 曲線
+  const vis = hist.slice(0, step + 1);
+  if (vis.length >= 2) {
+    ctx.beginPath();
+    vis.forEach((h, i) => {
+      if (i === 0) ctx.moveTo(cxf(h.t), cyf(h.bid));
+      else ctx.lineTo(cxf(h.t), cyf(h.bid));
+    });
+    ctx.strokeStyle = '#60a5fa'; ctx.lineWidth = 2.2; ctx.stroke();
+  }
+  if (step < hist.length) {
+    const h = hist[step];
+    ctx.beginPath(); ctx.arc(cxf(h.t), cyf(h.bid), 4.5, 0, Math.PI * 2);
+    ctx.fillStyle = '#60a5fa'; ctx.fill();
+  }
+
+  drawAxes(ctx, ml, mr, mt, mb, W, H);
+  ctx.fillStyle = '#64748b'; ctx.font = '10px monospace';
+  ctx.textAlign = 'right';
+  for (const v of [0.5, 1, 2, 3, 4, 5]) {
+    ctx.fillText(v.toFixed(1), ml - 4, cyf(v) + 4);
+  }
+  ctx.textAlign = 'center';
+  for (let i = 0; i <= 7; i++) {
+    ctx.fillText('t=' + Math.round(i / 7 * (N - 1)), ml + (i / 7) * pw, mt + ph + 16);
+  }
+}
+
+// ── PID 成分チャート ─────────────────────────────────────────
+function drawPidChart(hist, step) {
+  const canvas = document.getElementById('pidC');
+  const W = canvas.width, H = canvas.height;
+  const ml = 52, mr = 16, mt = 20, mb = 32;
+  const pw = W - ml - mr, ph = H - mt - mb;
+  const ctx = clearCanvas(canvas);
+  const N = hist.length;
+
+  const allU = hist.flatMap(h => [h.P, h.I, h.D, h.u]);
+  const minV = Math.min(...allU, -1), maxV = Math.max(...allU, 1);
+  const range = Math.max(Math.abs(minV), Math.abs(maxV)) * 1.2 || 100;
+
+  const cxf = t => ml + (t / (N - 1)) * pw;
+  const cyf = v => mt + ph / 2 - (v / range) * (ph / 2) * 0.9;
+
+  // グリッド
+  ctx.strokeStyle = '#1e293b'; ctx.lineWidth = 0.5;
+  for (const f of [0, 0.5, 1]) {
+    ctx.beginPath(); ctx.moveTo(ml, cyf(range * f)); ctx.lineTo(ml + pw, cyf(range * f)); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(ml, cyf(-range * f)); ctx.lineTo(ml + pw, cyf(-range * f)); ctx.stroke();
+  }
+
+  // ゼロ線
+  ctx.beginPath(); ctx.moveTo(ml, cyf(0)); ctx.lineTo(ml + pw, cyf(0));
+  ctx.strokeStyle = '#334155'; ctx.lineWidth = 1; ctx.stroke();
+
+  const vis = hist.slice(0, step + 1);
+  const lines = [
+    { key: 'P', color: '#fb923c' },
+    { key: 'I', color: '#a78bfa' },
+    { key: 'D', color: '#34d399' },
+    { key: 'u', color: '#fbbf24', width: 2.2 },
+  ];
+  for (const { key, color, width = 1.5 } of lines) {
+    if (vis.length < 2) continue;
+    ctx.beginPath();
+    vis.forEach((h, i) => {
+      if (i === 0) ctx.moveTo(cxf(h.t), cyf(h[key]));
+      else ctx.lineTo(cxf(h.t), cyf(h[key]));
+    });
+    ctx.strokeStyle = color; ctx.lineWidth = width; ctx.stroke();
+  }
+
+  drawAxes(ctx, ml, mr, mt, mb, W, H);
+  ctx.fillStyle = '#64748b'; ctx.font = '9px monospace'; ctx.textAlign = 'right';
+  for (const f of [-1, -0.5, 0, 0.5, 1]) {
+    ctx.fillText(Math.round(range * f), ml - 3, cyf(range * f) + 4);
+  }
+  ctx.textAlign = 'center';
+  for (let i = 0; i <= 7; i++) {
+    ctx.fillText('t=' + Math.round(i / 7 * (N - 1)), ml + (i / 7) * pw, mt + ph + 16);
+  }
+}
+
+// ── ライブ数式パネル ─────────────────────────────────────────
+function updateFormula(h, kp, ki, kd, target) {
+  const el = document.getElementById('flive');
+  if (!h) {
+    el.innerHTML = '<span class="dim">— シミュレーション実行後に<br>ステップごとの計算値が<br>ここに表示されます —</span>';
+    return;
+  }
+  const fmt = v => Math.round(v).toLocaleString();
+  const fmtF = v => v >= 0 ? '+' + fmt(v) : fmt(v);
+  const errClass = h.err >= 0 ? 'pos' : 'neg';
+  const spiralWarn = (h.bid <= 0.502 && h.nextBid <= 0.502)
+    ? ' <span class="spiral">← 最低値に固着!</span>' : '';
+
+  el.innerHTML = `
+<span class="dim">── ステップ t = ${h.t} ──</span><br>
+実績CPA = <span class="hi-cpa">¥${fmt(h.actual)}</span><br>
+<br>
+e(t) = ${fmt(h.actual)} − <span class="hi-t">¥${fmt(target)}</span><br>
+&nbsp;&nbsp;&nbsp;&nbsp; = <span class="${errClass}">${fmtF(h.err)}</span><br>
+<br>
+<span class="dim">u(t) = K<sub>p</sub>·e + K<sub>i</sub>·∫e dt + K<sub>d</sub>·de/dt</span><br>
+&nbsp;&nbsp;&nbsp;&nbsp; = ${kp}×${fmt(h.err)} + ${ki}×${fmt(h.integral)} + ${kd}×${fmt(h.rawD)}<br>
+&nbsp;&nbsp;&nbsp;&nbsp; = <span class="hi-p">${fmt(h.P)}</span> + <span class="hi-i">${fmt(h.I)}</span> + <span class="hi-d">${fmt(h.D)}</span><br>
+&nbsp;&nbsp;&nbsp;&nbsp; = <span class="hi-u">${fmt(h.u)}</span><br>
+<br>
+bid: ${h.bid.toFixed(3)} − ${fmt(h.u)}×0.0005<br>
+&nbsp;&nbsp;&nbsp;→ <span class="hi-bid">${h.nextBid.toFixed(3)}</span>${spiralWarn}
+`;
+}
+
+// ── スパイラル判定 ─────────────────────────────────────────
+const MIN_ACHIEVABLE = 1200 * Math.sqrt(0.5); // ≈ 848.5
+function checkSpiral(target) {
+  const el = document.getElementById('saAlert');
+  if (target < MIN_ACHIEVABLE - 50) {
+    el.className = 'spiral-alert show';
+    el.textContent =
+      `⚠ 低入札スパイラル発生 — 目標CPA ¥${target.toLocaleString()} は達成不可能です。`
+      + ` bid=0.5（最低値）での実現可能な最低CPA は約 ¥${Math.round(MIN_ACHIEVABLE).toLocaleString()} 。`
+      + ` 積分項が蓄積しbidが最低値に張り付いたまま収束しません。`;
+  } else {
+    el.className = 'spiral-alert';
+  }
+}
+
+// ── プレビュー（スライダー変更時は静的表示） ─────────────────
+let hist = [], animTimer = null, currentStep = 0;
+
+function getParams() {
+  return {
+    kp: +document.getElementById('kpS').value,
+    ki: +document.getElementById('kiS').value,
+    kd: +document.getElementById('kdS').value,
+    target: +document.getElementById('tS').value,
+  };
+}
+
+function preview() {
+  const { kp, ki, kd, target } = getParams();
+  hist = runSim(target, kp, ki, kd);
+  checkSpiral(target);
+  drawCpaChart(hist, hist.length - 1, target);
+  drawBidChart(hist, hist.length - 1);
+  drawPidChart(hist, hist.length - 1);
+  updateFormula(null);
+}
+
+function syncLabels() {
+  const kp = +document.getElementById('kpS').value;
+  const ki = +document.getElementById('kiS').value;
+  const kd = +document.getElementById('kdS').value;
+  const t  = +document.getElementById('tS').value;
+  document.getElementById('kpV').textContent = kp.toFixed(2);
+  document.getElementById('kiV').textContent = ki.toFixed(3);
+  document.getElementById('kdV').textContent = kd.toFixed(2);
+  document.getElementById('tV').textContent  = '¥' + t.toLocaleString();
+}
+
+['kpS', 'kiS', 'kdS', 'tS'].forEach(id => {
+  document.getElementById(id).oninput = () => {
+    if (animTimer) stopAnim();
+    syncLabels();
+    preview();
+  };
+});
+
+// ── アニメーション ─────────────────────────────────────────
+function stopAnim() {
+  clearInterval(animTimer);
+  animTimer = null;
+  document.getElementById('runBtn').textContent = '▶ シミュレーション実行';
+  document.getElementById('runBtn').className = 'bp';
+}
+
+document.getElementById('runBtn').onclick = () => {
+  if (animTimer) { stopAnim(); return; }
+  const { kp, ki, kd, target } = getParams();
+  hist = runSim(target, kp, ki, kd);
+  checkSpiral(target);
+  currentStep = 0;
+  document.getElementById('runBtn').textContent = '⏸ 停止';
+  document.getElementById('runBtn').className = 'bp running';
+
+  animTimer = setInterval(() => {
+    drawCpaChart(hist, currentStep, target);
+    drawBidChart(hist, currentStep);
+    drawPidChart(hist, currentStep);
+    updateFormula(hist[currentStep], kp, ki, kd, target);
+    currentStep++;
+    if (currentStep >= hist.length) stopAnim();
+  }, 110);
+};
+
+document.getElementById('rstBtn').onclick = () => {
+  if (animTimer) stopAnim();
+  document.getElementById('kpS').value = 0.3;
+  document.getElementById('kiS').value = 0.05;
+  document.getElementById('kdS').value = 0.1;
+  document.getElementById('tS').value = 1000;
+  syncLabels();
+  preview();
+};
+
+document.getElementById('spiralBtn').onclick = () => {
+  if (animTimer) stopAnim();
+  document.getElementById('tS').value = 300;
+  document.getElementById('kpS').value = 0.3;
+  document.getElementById('kiS').value = 0.05;
+  document.getElementById('kdS').value = 0.1;
+  syncLabels();
+  // 少し待ってから自動実行
+  preview();
+  setTimeout(() => document.getElementById('runBtn').click(), 100);
+};
+
+// ── 初期表示 ─────────────────────────────────────────────────
+syncLabels();
+preview();
+</script>
+</body>
+</html>
