@@ -1,0 +1,897 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MAI / AEO / VBO — アプリ広告最適化シミュレーター</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#0f172a;color:#e2e8f0;font-family:'Segoe UI',system-ui,sans-serif;padding:1.5rem;min-height:100vh}
+h1{font-size:1.2rem;font-weight:700;color:#f1f5f9;margin-bottom:1.2rem;display:flex;align-items:center;gap:.5rem}
+.layout{display:grid;grid-template-columns:300px 1fr;gap:1.25rem;max-width:1100px}
+.card{background:#1e293b;border-radius:12px;padding:1.2rem;margin-bottom:1rem}
+.card:last-child{margin-bottom:0}
+h2{font-size:.72rem;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.08em;margin-bottom:.9rem}
+
+/* Mode tabs */
+.mode-tabs{display:flex;gap:.4rem;margin-bottom:1rem}
+.mtab{flex:1;padding:.45rem .3rem;border-radius:8px;border:2px solid transparent;cursor:pointer;font-size:.8rem;font-weight:700;text-align:center;transition:all .15s;background:#0f172a;color:#64748b}
+.mtab.mai{border-color:#334155}.mtab.mai.active{background:#1e3a5f;border-color:#3b82f6;color:#93c5fd}
+.mtab.aeo{border-color:#334155}.mtab.aeo.active{background:#3b2f0a;border-color:#f59e0b;color:#fcd34d}
+.mtab.vbo{border-color:#334155}.mtab.vbo.active{background:#3b0a2f;border-color:#ec4899;color:#f9a8d4}
+
+/* Control buttons */
+.ctrl-btns{display:flex;gap:.4rem;margin-bottom:1rem}
+button{padding:.45rem .8rem;border-radius:8px;border:none;cursor:pointer;font-size:.8rem;font-weight:600;transition:all .15s}
+.btn-run{background:#16a34a;color:#fff;flex:1}.btn-run:hover{background:#15803d}
+.btn-run.running{background:#0f766e}
+.btn-stop{background:#334155;color:#94a3b8;flex:1}.btn-stop:hover{background:#475569}
+.btn-reset{background:#334155;color:#94a3b8;flex:1}.btn-reset:hover{background:#475569}
+
+/* Mode description box */
+.mode-desc{background:#0f172a;border-radius:8px;padding:.85rem 1rem;font-size:.77rem;color:#94a3b8;margin-bottom:1rem;line-height:1.6;min-height:100px}
+.mode-desc .formula{font-family:'Courier New',monospace;color:#7dd3fc;margin:.3rem 0;font-size:.75rem}
+.mode-desc .note{color:#64748b;font-size:.72rem;margin-top:.4rem}
+
+/* Sliders */
+.sg{margin-bottom:.85rem}
+.sg label{display:flex;justify-content:space-between;font-size:.79rem;color:#94a3b8;margin-bottom:.35rem}
+.sv{font-weight:700;font-variant-numeric:tabular-nums;color:#60a5fa}
+input[type=range]{width:100%;accent-color:#3b82f6;cursor:pointer;height:4px}
+
+/* Stats */
+.stats{display:grid;grid-template-columns:1fr 1fr;gap:.4rem .75rem;font-size:.78rem;margin-top:.5rem;padding:.75rem;background:#0f172a;border-radius:8px}
+.sk{color:#64748b}.sv2{font-weight:700;color:#f1f5f9;font-variant-numeric:tabular-nums}
+.sv2.whale{color:#fbbf24}
+
+/* Charts */
+canvas{display:block;border-radius:8px;background:#0f172a}
+.chart-wrap{margin-bottom:1rem}
+.chart-wrap:last-child{margin-bottom:0}
+.chart-title{font-size:.76rem;font-weight:600;color:#64748b;margin-bottom:.45rem;display:flex;align-items:center;gap:.4rem}
+.chart-row{display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-bottom:1rem}
+.legend{display:flex;gap:.85rem;font-size:.72rem;margin-top:.4rem;flex-wrap:wrap}
+.leg{display:flex;align-items:center;gap:.3rem;color:#94a3b8}
+.leg-dot{width:10px;height:10px;border-radius:50%}
+.leg-line{width:14px;height:2.5px;border-radius:2px}
+
+/* Formula panel */
+.fbox{background:#0f172a;border-radius:8px;padding:1rem;font-family:'Courier New',monospace;font-size:.77rem;line-height:1.8;color:#94a3b8}
+.fbox .fl{margin:.1rem 0}
+.fbox .fhi{color:#fbbf24;font-weight:700}
+.fbox .fmode-mai{color:#93c5fd}
+.fbox .fmode-aeo{color:#fcd34d}
+.fbox .fmode-vbo{color:#f9a8d4}
+.fbox .fwhale{color:#fbbf24;font-weight:700;font-size:.9rem}
+.fbox .fdim{color:#334155}
+
+/* Whale flash overlay */
+.whale-flash{position:fixed;top:0;left:0;width:100%;height:100%;pointer-events:none;opacity:0;background:rgba(251,191,36,.08);border:3px solid rgba(251,191,36,.4);border-radius:0;transition:opacity .1s;z-index:100}
+.whale-flash.show{opacity:1}
+</style>
+</head>
+<body>
+<h1>📱 MAI / AEO / VBO — アプリ広告最適化シミュレーター</h1>
+
+<div class="layout">
+  <!-- 左: コントロール -->
+  <div>
+    <div class="card">
+      <h2>学習モード</h2>
+      <div class="mode-tabs">
+        <div class="mtab mai active" id="tabMAI" onclick="setMode('MAI')">MAI</div>
+        <div class="mtab aeo" id="tabAEO" onclick="setMode('AEO')">AEO</div>
+        <div class="mtab vbo" id="tabVBO" onclick="setMode('VBO')">VBO</div>
+      </div>
+      <div class="ctrl-btns">
+        <button class="btn-run" id="runBtn" onclick="startSim()">▶ 実行</button>
+        <button class="btn-stop" id="stopBtn" onclick="stopSim()">⏸ 停止</button>
+        <button class="btn-reset" onclick="resetSim()">↺ リセット</button>
+      </div>
+
+      <div class="mode-desc" id="modeDesc">
+        <strong style="color:#93c5fd">MAI モード</strong><br>
+        <div class="formula">L = (1/2)(1 − f(x))²</div>
+        誰がインストールしても同じ重み。<br>
+        課金額は一切見ない。全ユーザーを<br>
+        「インストール候補」として扱う。
+        <div class="note">→ x全体にフラットな予測曲線に収束</div>
+      </div>
+
+      <h2>パラメータ</h2>
+      <div class="sg">
+        <label>鯨出現率 <span class="sv" id="wrV">1.0%</span></label>
+        <input type="range" id="wrS" min="0.001" max="0.05" step="0.001" value="0.01" oninput="updateSliders()">
+      </div>
+      <div class="sg">
+        <label>鯨課金額 <span class="sv" id="wvV">¥100,000</span></label>
+        <input type="range" id="wvS" min="100000" max="200000" step="5000" value="100000" oninput="updateSliders()">
+      </div>
+      <div class="sg">
+        <label>鯨重みMult <span class="sv" id="wmV">1×</span></label>
+        <input type="range" id="wmS" min="1" max="20" step="1" value="1" oninput="updateSliders()">
+      </div>
+      <div class="sg">
+        <label>学習率 η <span class="sv" id="lrV">0.010</span></label>
+        <input type="range" id="lrS" min="0.001" max="0.1" step="0.001" value="0.01" oninput="updateSliders()">
+      </div>
+      <div class="sg">
+        <label>探索ノイズ σ <span class="sv" id="nsV">0.05</span></label>
+        <input type="range" id="nsS" min="0" max="0.3" step="0.01" value="0.05" oninput="updateSliders()">
+      </div>
+      <div class="sg">
+        <label>速度 (user/frame) <span class="sv" id="spV">3</span></label>
+        <input type="range" id="spS" min="1" max="20" step="1" value="3" oninput="updateSliders()">
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>ライブ統計</h2>
+      <div class="stats">
+        <span class="sk">サンプル n</span><span class="sv2" id="sN">0</span>
+        <span class="sk">w（傾き）</span><span class="sv2" id="sW">0.100</span>
+        <span class="sk">b（切片）</span><span class="sv2" id="sB">−2.000</span>
+        <span class="sk">最新 |∇w|</span><span class="sv2" id="sG">0.000</span>
+        <span class="sk">鯨遭遇数</span><span class="sv2 whale" id="sWh">🐋 0</span>
+        <span class="sk">モード</span><span class="sv2" id="sMd" style="color:#93c5fd">MAI</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- 右: チャートエリア -->
+  <div>
+    <!-- ① 予測曲線 + ユーザー散布図 -->
+    <div class="card chart-wrap">
+      <div class="chart-title">① 予測曲線 f(x) + ユーザー散布図</div>
+      <canvas id="c1" width="680" height="280"></canvas>
+      <div class="legend">
+        <div class="leg"><div class="leg-dot" style="background:#64748b"></div>ZERO (v=0)</div>
+        <div class="leg"><div class="leg-dot" style="background:#3b82f6"></div>PAYER (v=¥500)</div>
+        <div class="leg"><div class="leg-dot" style="background:#fbbf24"></div>WHALE (v=鯨課金額)</div>
+        <div class="leg"><div class="leg-line" style="background:#22c55e"></div>f(x) 予測曲線</div>
+      </div>
+    </div>
+
+    <!-- ② + ④ 並列 -->
+    <div class="chart-row">
+      <div class="card chart-wrap">
+        <div class="chart-title">② パラメータ軌跡 (w, b) 空間</div>
+        <canvas id="c2" width="370" height="200"></canvas>
+      </div>
+      <div class="card chart-wrap">
+        <div class="chart-title">④ 損失ランドスケープ</div>
+        <canvas id="c4" width="370" height="200"></canvas>
+      </div>
+    </div>
+
+    <!-- ③ 勾配ノルム -->
+    <div class="card chart-wrap">
+      <div class="chart-title">③ 勾配ノルム |∇w| 時系列（log スケール）</div>
+      <canvas id="c3" width="680" height="160"></canvas>
+      <div class="legend">
+        <div class="leg"><div class="leg-dot" style="background:#475569"></div>ZERO</div>
+        <div class="leg"><div class="leg-dot" style="background:#3b82f6"></div>PAYER</div>
+        <div class="leg"><div class="leg-dot" style="background:#fbbf24"></div>WHALE 🐋</div>
+      </div>
+    </div>
+
+    <!-- 数式パネル -->
+    <div class="card">
+      <div class="chart-title">数式パネル — 現在ステップの計算値</div>
+      <div class="fbox" id="fbox">
+        <div class="fl fdim">— シミュレーション実行後に更新されます —</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- whale flash overlay -->
+<div class="whale-flash" id="whaleFlash"></div>
+
+<script>
+// ─── 状態 ───────────────────────────────────────────────────
+let currentMode = 'MAI';
+let running = false;
+let rafId = null;
+let frameCount = 0;
+
+// パラメータ
+let whaleRate = 0.01;
+let whaleValue = 100000;
+let whaleMult = 1;
+let lr = 0.01;
+let noise = 0.05;
+let speed = 3;
+
+// オプティマイザー状態
+let w = 0.1, b = -2.0;
+let totalN = 0;
+let whaleCount = 0;
+
+// 履歴
+const history = [];      // {label, x, v, gradW, w, b}
+const MAX_HIST = 300;
+
+// 鯨イベント用
+let whaleFlashTimer = null;
+let whaleArrow = null;   // {gradW, x, y} last whale event for canvas overlay
+let whaleArrowTimer = null;
+
+// ─── Box-Muller ───────────────────────────────────────────────
+function randn() {
+  let u, v;
+  do { u = Math.random(); } while (u === 0);
+  do { v = Math.random(); } while (v === 0);
+  return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+}
+
+function clamp(x, lo, hi) { return Math.max(lo, Math.min(hi, x)); }
+
+// ─── UserGenerator ────────────────────────────────────────────
+function generateUser() {
+  const r = Math.random();
+  const noiseVal = parseFloat(document.getElementById('nsS').value);
+  if (r < whaleRate) {
+    return { label: 'WHALE', x: clamp(0.95 + randn() * 0.02 + randn() * noiseVal * 0.3, 0.01, 0.99), v: whaleValue };
+  } else if (r < whaleRate + 0.15) {
+    return { label: 'PAYER', x: clamp(0.65 + randn() * 0.10 + randn() * noiseVal * 0.3, 0.01, 0.99), v: 500 };
+  } else {
+    return { label: 'ZERO',  x: clamp(0.30 + randn() * 0.15 + randn() * noiseVal * 0.5, 0.01, 0.99), v: 0 };
+  }
+}
+
+// ─── sigmoid ─────────────────────────────────────────────────
+function sigmoid(z) { return 1 / (1 + Math.exp(-z)); }
+
+// ─── AdOptimizer.update ──────────────────────────────────────
+function optimizerUpdate(user) {
+  const x = user.x;
+  const v = user.v;
+  const AmountMax = (currentMode === 'VBO') ? whaleValue : 1;
+
+  const z = w * x + b;
+  const p = sigmoid(z);           // [0,1]
+  const f_x = AmountMax * p;      // 予測値
+
+  let gw = 0, gb = 0;
+
+  if (currentMode === 'MAI') {
+    // L = 0.5*(p-1)^2  →  ∂L/∂w = (p-1)*p*(1-p)*x
+    const err = p - 1;
+    gw = err * p * (1 - p) * x;
+    gb = err * p * (1 - p);
+
+  } else if (currentMode === 'AEO') {
+    // L = -[y*log(p) + (1-y)*log(1-p)]  →  ∂L/∂w = (p-y)*x
+    const y = v > 0 ? 1 : 0;
+    gw = (p - y) * x;
+    gb = (p - y);
+
+  } else if (currentMode === 'VBO') {
+    // L = 0.5 * V_i * (V_i - f(x))^2
+    // ∂L/∂w = V_i * (f(x)-V_i) * AmountMax * p*(1-p) * x
+    // スケール 1e-9 で数値安定化
+    const err = f_x - v;   // (f(x) - V_i)
+    gw = whaleMult * v * err * p * (1 - p) * x * 1e-9;
+    gb = whaleMult * v * err * p * (1 - p) * 1e-9;
+  }
+
+  // NaN guard
+  if (!isFinite(gw)) gw = 0;
+  if (!isFinite(gb)) gb = 0;
+
+  // clamp to prevent explosion
+  gw = clamp(gw, -10, 10);
+  gb = clamp(gb, -10, 10);
+
+  const prevW = w, prevB = b;
+  w -= lr * gw;
+  b -= lr * gb;
+
+  // keep w,b in reasonable range
+  w = clamp(w, -5, 20);
+  b = clamp(b, -10, 5);
+
+  const gradNorm = Math.abs(gw);
+
+  history.push({ label: user.label, x, v, gradW: gw, gradNorm, w, b, prevW, prevB });
+  if (history.length > MAX_HIST) history.shift();
+
+  return { gw, gradNorm, p, f_x, AmountMax };
+}
+
+// ─── Whale event effects ──────────────────────────────────────
+function triggerWhaleEffect(gradW, x) {
+  // Gold flash
+  const el = document.getElementById('whaleFlash');
+  el.classList.add('show');
+  if (whaleFlashTimer) clearTimeout(whaleFlashTimer);
+  whaleFlashTimer = setTimeout(() => el.classList.remove('show'), 350);
+
+  // Store arrow for canvas drawing
+  whaleArrow = { gradW, x };
+  if (whaleArrowTimer) clearTimeout(whaleArrowTimer);
+  whaleArrowTimer = setTimeout(() => { whaleArrow = null; }, 2000);
+}
+
+// ─── Animation loop ───────────────────────────────────────────
+function loop() {
+  for (let i = 0; i < speed; i++) {
+    const user = generateUser();
+    const result = optimizerUpdate(user);
+    totalN++;
+
+    if (user.label === 'WHALE') {
+      whaleCount++;
+      if (currentMode === 'VBO') {
+        triggerWhaleEffect(result.gw, user.x);
+      }
+    }
+    updateFormulaPanel(user, result);
+  }
+
+  drawMainChart();
+  drawTrajectory();
+  drawGradNorm();
+  if (frameCount % 30 === 0) drawLossLandscape();
+  updateStats();
+  frameCount++;
+
+  if (running) rafId = requestAnimationFrame(loop);
+}
+
+// ─── Controls ─────────────────────────────────────────────────
+function startSim() {
+  if (running) return;
+  running = true;
+  document.getElementById('runBtn').classList.add('running');
+  document.getElementById('runBtn').textContent = '▶ 実行中';
+  rafId = requestAnimationFrame(loop);
+}
+
+function stopSim() {
+  running = false;
+  if (rafId) cancelAnimationFrame(rafId);
+  document.getElementById('runBtn').classList.remove('running');
+  document.getElementById('runBtn').textContent = '▶ 実行';
+}
+
+function resetSim() {
+  stopSim();
+  w = 0.1; b = -2.0;
+  totalN = 0; whaleCount = 0; frameCount = 0;
+  history.length = 0;
+  whaleArrow = null;
+  updateStats();
+  clearAllCanvases();
+  updateFormulaPanel(null, null);
+}
+
+function setMode(mode) {
+  currentMode = mode;
+  ['MAI','AEO','VBO'].forEach(m => {
+    document.getElementById('tab'+m).classList.toggle('active', m === mode);
+  });
+  updateModeDesc();
+  updateStats();
+  drawMainChart();
+}
+
+function updateModeDesc() {
+  const d = document.getElementById('modeDesc');
+  if (currentMode === 'MAI') {
+    d.innerHTML = `<strong style="color:#93c5fd">MAI モード（Mobile App Install）</strong><br>
+<div class="formula">L = (1/2)(1 − f(x))²</div>
+誰がインストールしても同じ重み。<br>課金額は一切見ない。全ユーザーを<br>「インストール候補」として扱う。
+<div class="note">→ x全体にフラットな曲線に収束</div>`;
+  } else if (currentMode === 'AEO') {
+    d.innerHTML = `<strong style="color:#fcd34d">AEO モード（App Event Optimization）</strong><br>
+<div class="formula">L = −[y·log(p) + (1−y)·log(1−p)]</div>
+¥500も¥10万も「課金した=1」として学習。<br>金額差を区別できない 2値分類。
+<div class="note">→ 課金ユーザー(x≈0.65)付近に収束</div>`;
+  } else {
+    d.innerHTML = `<strong style="color:#f9a8d4">VBO モード（Value-Based Optimization）</strong><br>
+<div class="formula">L = (1/2) × V_i × (V_i − f(x))²</div>
+鯨のV_iが勾配に<strong style="color:#fbbf24">二重</strong>に乗る。<br>たった1件の鯨が数百万件分の学習信号。
+<div class="note">→ 鯨出現時に巨大勾配スパイク発生</div>`;
+  }
+}
+
+function updateSliders() {
+  whaleRate  = parseFloat(document.getElementById('wrS').value);
+  whaleValue = parseFloat(document.getElementById('wvS').value);
+  whaleMult  = parseFloat(document.getElementById('wmS').value);
+  lr         = parseFloat(document.getElementById('lrS').value);
+  noise      = parseFloat(document.getElementById('nsS').value);
+  speed      = parseInt(document.getElementById('spS').value);
+
+  document.getElementById('wrV').textContent = (whaleRate*100).toFixed(1) + '%';
+  document.getElementById('wvV').textContent = '¥' + whaleValue.toLocaleString();
+  document.getElementById('wmV').textContent = whaleMult + '×';
+  document.getElementById('lrV').textContent = lr.toFixed(3);
+  document.getElementById('nsV').textContent = noise.toFixed(2);
+  document.getElementById('spV').textContent = speed;
+}
+
+function updateStats() {
+  document.getElementById('sN').textContent = totalN.toLocaleString();
+  document.getElementById('sW').textContent = w.toFixed(4);
+  document.getElementById('sB').textContent = b.toFixed(4);
+  const lastGrad = history.length ? history[history.length-1].gradNorm : 0;
+  document.getElementById('sG').textContent = lastGrad.toExponential(2);
+  document.getElementById('sWh').textContent = '🐋 ' + whaleCount;
+  const modeEl = document.getElementById('sMd');
+  modeEl.textContent = currentMode;
+  modeEl.style.color = currentMode==='MAI' ? '#93c5fd' : currentMode==='AEO' ? '#fcd34d' : '#f9a8d4';
+}
+
+// ─── Chart helpers ────────────────────────────────────────────
+function clearAllCanvases() {
+  ['c1','c2','c3','c4'].forEach(id => {
+    const cv = document.getElementById(id);
+    cv.getContext('2d').clearRect(0, 0, cv.width, cv.height);
+  });
+}
+
+function modeColor(alpha=1) {
+  if (currentMode === 'MAI') return `rgba(147,197,253,${alpha})`;
+  if (currentMode === 'AEO') return `rgba(252,211,77,${alpha})`;
+  return `rgba(249,168,212,${alpha})`;
+}
+
+function drawAxes(ctx, W, H, pad, xLabel, yLabel, xMin, xMax, yMin, yMax, xTicks=5, yTicks=4) {
+  ctx.strokeStyle = '#1e293b';
+  ctx.lineWidth = 1;
+  // grid
+  for (let i=0; i<=xTicks; i++) {
+    const xv = xMin + (xMax-xMin)*i/xTicks;
+    const px = pad.l + (xv-xMin)/(xMax-xMin)*(W-pad.l-pad.r);
+    ctx.beginPath(); ctx.moveTo(px, pad.t); ctx.lineTo(px, H-pad.b);
+    ctx.strokeStyle='#1e293b'; ctx.stroke();
+    ctx.fillStyle='#475569'; ctx.font='10px sans-serif'; ctx.textAlign='center';
+    ctx.fillText(xv.toFixed(1), px, H-pad.b+12);
+  }
+  for (let i=0; i<=yTicks; i++) {
+    const yv = yMin + (yMax-yMin)*i/yTicks;
+    const py = H-pad.b - (yv-yMin)/(yMax-yMin)*(H-pad.t-pad.b);
+    ctx.beginPath(); ctx.moveTo(pad.l, py); ctx.lineTo(W-pad.r, py);
+    ctx.strokeStyle='#1e293b'; ctx.stroke();
+    ctx.fillStyle='#475569'; ctx.font='10px sans-serif'; ctx.textAlign='right';
+    ctx.fillText(yv.toFixed(1), pad.l-4, py+3);
+  }
+  // axes
+  ctx.strokeStyle='#334155'; ctx.lineWidth=1;
+  ctx.beginPath(); ctx.moveTo(pad.l, pad.t); ctx.lineTo(pad.l, H-pad.b); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(pad.l, H-pad.b); ctx.lineTo(W-pad.r, H-pad.b); ctx.stroke();
+  if (xLabel) { ctx.fillStyle='#64748b'; ctx.font='11px sans-serif'; ctx.textAlign='center'; ctx.fillText(xLabel, W/2, H-1); }
+  if (yLabel) {
+    ctx.save(); ctx.translate(10, H/2); ctx.rotate(-Math.PI/2);
+    ctx.fillStyle='#64748b'; ctx.font='11px sans-serif'; ctx.textAlign='center';
+    ctx.fillText(yLabel, 0, 0); ctx.restore();
+  }
+}
+
+// ─── ① Main chart ─────────────────────────────────────────────
+function drawMainChart() {
+  const cv = document.getElementById('c1');
+  const ctx = cv.getContext('2d');
+  const W = cv.width, H = cv.height;
+  const pad = {l:50, r:20, t:20, b:28};
+
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = '#0f172a';
+  ctx.fillRect(0, 0, W, H);
+
+  const toX = x => pad.l + x*(W-pad.l-pad.r);
+  const toY = (y, yMax) => H-pad.b - clamp(y/yMax, 0, 1.1)*(H-pad.t-pad.b);
+
+  const AmountMax = (currentMode === 'VBO') ? whaleValue : 1;
+
+  // Y axis range
+  const yMax = (currentMode === 'VBO') ? whaleValue * 1.1 : 1.15;
+
+  // Draw axes
+  drawAxes(ctx, W, H, pad, 'ユーザー特性 x', '予測値 f(x)', 0, 1, 0, yMax, 5, 4);
+
+  // ── Prediction curve ──
+  ctx.beginPath();
+  ctx.strokeStyle = '#22c55e';
+  ctx.lineWidth = 2.5;
+  ctx.shadowColor = '#22c55e';
+  ctx.shadowBlur = 6;
+  for (let i=0; i<=200; i++) {
+    const xi = i/200;
+    const fx = AmountMax * sigmoid(w*xi + b);
+    const px = toX(xi), py = toY(fx, yMax);
+    i===0 ? ctx.moveTo(px,py) : ctx.lineTo(px,py);
+  }
+  ctx.stroke();
+  ctx.shadowBlur = 0;
+
+  // ── User dots ──
+  const recent = history.slice(-80);
+  recent.forEach((h, idx) => {
+    const alpha = 0.3 + 0.7*(idx/recent.length);
+    const px = toX(h.x);
+    const yv = (currentMode === 'VBO') ? h.v : (h.v > 0 ? 1 : 0);
+    const py = toY(yv + (currentMode==='VBO'?0:0), yMax);
+
+    if (h.label === 'ZERO') {
+      ctx.beginPath();
+      ctx.arc(px, py, 3.5, 0, Math.PI*2);
+      ctx.fillStyle = `rgba(100,116,139,${alpha})`;
+      ctx.fill();
+    } else if (h.label === 'PAYER') {
+      ctx.beginPath();
+      ctx.arc(px, py, 5, 0, Math.PI*2);
+      ctx.fillStyle = `rgba(59,130,246,${alpha})`;
+      ctx.fill();
+    } else {
+      // WHALE: star shape
+      drawStar(ctx, px, py, 8, 4, 5, `rgba(251,191,36,${alpha})`);
+      // Glow ring
+      if (idx > recent.length - 10) {
+        ctx.beginPath();
+        ctx.arc(px, py, 12, 0, Math.PI*2);
+        ctx.strokeStyle = `rgba(251,191,36,${alpha*0.4})`;
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      }
+    }
+  });
+
+  // ── Whale arrow overlay ──
+  if (whaleArrow) {
+    const px = toX(whaleArrow.x);
+    const midY = (H-pad.t-pad.b)/2 + pad.t;
+    drawGradientArrow(ctx, px, midY - 30, whaleArrow.gradW, W, H);
+  }
+}
+
+function drawStar(ctx, cx, cy, outerR, innerR, points, color) {
+  ctx.beginPath();
+  for (let i=0; i<points*2; i++) {
+    const r = i%2===0 ? outerR : innerR;
+    const angle = (i/points)*Math.PI - Math.PI/2;
+    const x = cx + r*Math.cos(angle), y = cy + r*Math.sin(angle);
+    i===0 ? ctx.moveTo(x,y) : ctx.lineTo(x,y);
+  }
+  ctx.closePath();
+  ctx.fillStyle = color;
+  ctx.fill();
+}
+
+function drawGradientArrow(ctx, startX, startY, gradW, W, H) {
+  const label = `∇w = ${gradW >= 0 ? '+' : ''}${gradW.toFixed(3)}`;
+  const dir = gradW < 0 ? -1 : 1; // negative gradient = w increases
+  const len = 60 + Math.min(Math.abs(gradW)*30, 80);
+  const endX = startX + dir * len;
+  const endY = startY;
+
+  ctx.save();
+  ctx.strokeStyle = '#fbbf24';
+  ctx.fillStyle = '#fbbf24';
+  ctx.lineWidth = 3;
+  ctx.shadowColor = '#fbbf24';
+  ctx.shadowBlur = 12;
+
+  ctx.beginPath();
+  ctx.moveTo(startX, startY);
+  ctx.lineTo(endX, endY);
+  ctx.stroke();
+
+  // arrowhead
+  const angle = dir > 0 ? 0 : Math.PI;
+  ctx.beginPath();
+  ctx.moveTo(endX, endY);
+  ctx.lineTo(endX - dir*12*Math.cos(0.4), endY - 12*Math.sin(0.4));
+  ctx.lineTo(endX - dir*12*Math.cos(0.4), endY + 12*Math.sin(0.4));
+  ctx.closePath();
+  ctx.fill();
+
+  // label
+  ctx.shadowBlur = 0;
+  ctx.font = 'bold 13px Courier New';
+  ctx.fillStyle = '#fbbf24';
+  ctx.textAlign = dir > 0 ? 'left' : 'right';
+  ctx.fillText(label, endX + dir*6, startY - 8);
+
+  ctx.restore();
+}
+
+// ─── ② Parameter trajectory ───────────────────────────────────
+function drawTrajectory() {
+  const cv = document.getElementById('c2');
+  const ctx = cv.getContext('2d');
+  const W = cv.width, H = cv.height;
+  const pad = {l:48, r:18, t:18, b:28};
+
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = '#0f172a';
+  ctx.fillRect(0, 0, W, H);
+
+  const wMin=-1, wMax=12, bMin=-6, bMax=4;
+  const toX = wv => pad.l + (wv-wMin)/(wMax-wMin)*(W-pad.l-pad.r);
+  const toY = bv => H-pad.b - (bv-bMin)/(bMax-bMin)*(H-pad.t-pad.b);
+
+  drawAxes(ctx, W, H, pad, 'w', 'b', wMin, wMax, bMin, bMax, 5, 5);
+
+  // trajectory line
+  const pts = history.slice(-200);
+  if (pts.length < 2) {
+    // just draw initial point
+    ctx.beginPath();
+    ctx.arc(toX(w), toY(b), 5, 0, Math.PI*2);
+    ctx.fillStyle = '#fff';
+    ctx.fill();
+    return;
+  }
+
+  ctx.beginPath();
+  pts.forEach((h, i) => {
+    const px = toX(h.w), py = toY(h.b);
+    if (i===0) ctx.moveTo(px,py); else ctx.lineTo(px,py);
+  });
+  ctx.strokeStyle = modeColor(0.6);
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  // whale warp arrows
+  for (let i=1; i<pts.length; i++) {
+    const h = pts[i];
+    if (h.label === 'WHALE' && currentMode === 'VBO') {
+      const px0 = toX(h.prevW), py0 = toY(h.prevB);
+      const px1 = toX(h.w), py1 = toY(h.b);
+      const dx = px1-px0, dy = py1-py0;
+      if (Math.sqrt(dx*dx+dy*dy) > 4) {
+        ctx.save();
+        ctx.strokeStyle = '#fbbf24';
+        ctx.lineWidth = 2;
+        ctx.shadowColor = '#fbbf24';
+        ctx.shadowBlur = 8;
+        ctx.beginPath(); ctx.moveTo(px0,py0); ctx.lineTo(px1,py1); ctx.stroke();
+        ctx.shadowBlur = 0;
+        // arrowhead
+        const ang = Math.atan2(dy,dx);
+        ctx.fillStyle = '#fbbf24';
+        ctx.beginPath();
+        ctx.moveTo(px1, py1);
+        ctx.lineTo(px1-8*Math.cos(ang-0.4), py1-8*Math.sin(ang-0.4));
+        ctx.lineTo(px1-8*Math.cos(ang+0.4), py1-8*Math.sin(ang+0.4));
+        ctx.closePath(); ctx.fill();
+        ctx.restore();
+      }
+    }
+  }
+
+  // current position
+  ctx.beginPath();
+  ctx.arc(toX(w), toY(b), 5, 0, Math.PI*2);
+  ctx.fillStyle = '#fff';
+  ctx.strokeStyle = modeColor();
+  ctx.lineWidth = 2;
+  ctx.fill(); ctx.stroke();
+}
+
+// ─── ③ Gradient norm bar chart ────────────────────────────────
+function drawGradNorm() {
+  const cv = document.getElementById('c3');
+  const ctx = cv.getContext('2d');
+  const W = cv.width, H = cv.height;
+  const pad = {l:52, r:20, t:16, b:28};
+
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = '#0f172a';
+  ctx.fillRect(0, 0, W, H);
+
+  const recent = history.slice(-100);
+  if (!recent.length) return;
+
+  const logMax = 1;   // log10 scale max = 10^1 = 10
+  const logMin = -6;  // 10^-6
+
+  const chartW = W-pad.l-pad.r;
+  const chartH = H-pad.t-pad.b;
+  const barW = Math.max(2, chartW / 100 - 0.5);
+
+  // Y axis labels (log scale)
+  for (let lv = logMin; lv <= logMax; lv += 2) {
+    const py = H-pad.b - (lv-logMin)/(logMax-logMin)*chartH;
+    ctx.fillStyle = '#475569'; ctx.font = '9px sans-serif'; ctx.textAlign = 'right';
+    ctx.fillText('1e'+lv, pad.l-3, py+3);
+    ctx.strokeStyle = '#1e293b'; ctx.lineWidth = 0.5;
+    ctx.beginPath(); ctx.moveTo(pad.l, py); ctx.lineTo(W-pad.r, py); ctx.stroke();
+  }
+  ctx.strokeStyle = '#334155'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(pad.l, pad.t); ctx.lineTo(pad.l, H-pad.b); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(pad.l, H-pad.b); ctx.lineTo(W-pad.r, H-pad.b); ctx.stroke();
+
+  ctx.fillStyle = '#64748b'; ctx.font = '10px sans-serif'; ctx.textAlign = 'center';
+  ctx.fillText('|∇w|', 22, H/2);
+
+  recent.forEach((h, i) => {
+    const gn = Math.max(h.gradNorm, 1e-8);
+    const lgv = Math.log10(gn);
+    const normH = clamp((lgv-logMin)/(logMax-logMin), 0, 1) * chartH;
+    const px = pad.l + i*(chartW/100);
+    const py = H-pad.b - normH;
+
+    let color;
+    if (h.label === 'WHALE') color = '#fbbf24';
+    else if (h.label === 'PAYER') color = '#3b82f6';
+    else color = '#475569';
+
+    ctx.fillStyle = color;
+    ctx.fillRect(px, py, barW, normH);
+
+    // Whale marker
+    if (h.label === 'WHALE') {
+      ctx.save();
+      ctx.strokeStyle = '#fbbf24';
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([2,2]);
+      ctx.beginPath(); ctx.moveTo(px+barW/2, pad.t); ctx.lineTo(px+barW/2, H-pad.b); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = '#fbbf24'; ctx.font = '11px sans-serif'; ctx.textAlign = 'center';
+      ctx.fillText('🐋', px+barW/2, pad.t+11);
+      ctx.restore();
+    }
+  });
+}
+
+// ─── ④ Loss landscape heatmap ─────────────────────────────────
+function computeLoss(wv, bv) {
+  const AmountMax = (currentMode === 'VBO') ? whaleValue : 1;
+  const GRID_USERS = [
+    {x:0.95, v:whaleValue, w:whaleRate},
+    {x:0.65, v:500, w:0.15},
+    {x:0.30, v:0, w:1-whaleRate-0.15},
+  ];
+  let L = 0;
+  GRID_USERS.forEach(u => {
+    const p = sigmoid(wv*u.x + bv);
+    const f = AmountMax * p;
+    if (currentMode === 'MAI') {
+      L += u.w * 0.5 * (p-1)*(p-1);
+    } else if (currentMode === 'AEO') {
+      const y = u.v > 0 ? 1 : 0;
+      const eps = 1e-7;
+      L += u.w * (-(y*Math.log(p+eps) + (1-y)*Math.log(1-p+eps)));
+    } else {
+      L += u.w * whaleMult * 0.5 * u.v * (u.v-f)*(u.v-f) * 1e-10;
+    }
+  });
+  return L;
+}
+
+function drawLossLandscape() {
+  const cv = document.getElementById('c4');
+  const ctx = cv.getContext('2d');
+  const W = cv.width, H = cv.height;
+  const pad = {l:42, r:18, t:18, b:28};
+
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = '#0f172a';
+  ctx.fillRect(0, 0, W, H);
+
+  const wMin=0, wMax=10, bMin=-5, bMax=3;
+  const GRID = 22;
+  const cellW = (W-pad.l-pad.r)/GRID;
+  const cellH = (H-pad.t-pad.b)/GRID;
+
+  const losses = [];
+  let minL=Infinity, maxL=-Infinity;
+  for (let i=0; i<GRID; i++) {
+    losses[i] = [];
+    for (let j=0; j<GRID; j++) {
+      const wv = wMin + (i/(GRID-1))*(wMax-wMin);
+      const bv = bMin + (j/(GRID-1))*(bMax-bMin);
+      const L = computeLoss(wv, bv);
+      losses[i][j] = L;
+      if (L < minL) minL = L;
+      if (L > maxL) maxL = L;
+    }
+  }
+
+  const range = maxL - minL || 1;
+  for (let i=0; i<GRID; i++) {
+    for (let j=0; j<GRID; j++) {
+      const t = (losses[i][j]-minL)/range;
+      const r = Math.round(30 + t*200);
+      const g = Math.round(100 - t*80);
+      const bl = Math.round(200 - t*180);
+      ctx.fillStyle = `rgb(${r},${g},${bl})`;
+      const px = pad.l + i*cellW;
+      const py = pad.t + (GRID-1-j)*cellH;
+      ctx.fillRect(px, py, cellW+1, cellH+1);
+    }
+  }
+
+  // Axis labels
+  ctx.fillStyle = '#475569'; ctx.font = '9px sans-serif'; ctx.textAlign = 'center';
+  [0,5,10].forEach(v => {
+    const px = pad.l + (v-wMin)/(wMax-wMin)*(W-pad.l-pad.r);
+    ctx.fillText(v, px, H-pad.b+12);
+  });
+  ctx.textAlign = 'right';
+  [-4, 0].forEach(v => {
+    const py = H-pad.b - (v-bMin)/(bMax-bMin)*(H-pad.t-pad.b);
+    ctx.fillText(v, pad.l-3, py+3);
+  });
+  ctx.strokeStyle = '#334155'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(pad.l, pad.t); ctx.lineTo(pad.l, H-pad.b); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(pad.l, H-pad.b); ctx.lineTo(W-pad.r, H-pad.b); ctx.stroke();
+  ctx.fillStyle='#64748b'; ctx.font='10px sans-serif'; ctx.textAlign='center';
+  ctx.fillText('w', W/2, H-1);
+
+  // Current position cursor
+  const cx = pad.l + (w-wMin)/(wMax-wMin)*(W-pad.l-pad.r);
+  const cy = H-pad.b - (b-bMin)/(bMax-bMin)*(H-pad.t-pad.b);
+  if (cx>pad.l && cx<W-pad.r && cy>pad.t && cy<H-pad.b) {
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(cx-8,cy); ctx.lineTo(cx+8,cy); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(cx,cy-8); ctx.lineTo(cx,cy+8); ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(cx, cy, 5, 0, Math.PI*2);
+    ctx.strokeStyle = '#fff'; ctx.lineWidth = 2;
+    ctx.stroke();
+  }
+}
+
+// ─── Formula panel ────────────────────────────────────────────
+function updateFormulaPanel(user, result) {
+  const el = document.getElementById('fbox');
+  if (!user || !result) {
+    el.innerHTML = '<div class="fl fdim">— シミュレーション実行後に更新されます —</div>';
+    return;
+  }
+  const {p, f_x, AmountMax, gw} = result;
+  const modeClass = currentMode==='MAI'?'fmode-mai':currentMode==='AEO'?'fmode-aeo':'fmode-vbo';
+  const isWhale = user.label==='WHALE';
+
+  let lines = [];
+  lines.push(`<div class="fl">ユーザー: <span class="${isWhale?'fwhale':''}">${user.label}</span>  x=${user.x.toFixed(3)}  v=¥${user.v.toLocaleString()}</div>`);
+  lines.push(`<div class="fl fdim">──────────────────────────────────────</div>`);
+  lines.push(`<div class="fl">z = w·x + b = ${w.toFixed(3)}×${user.x.toFixed(3)} + (${b.toFixed(3)}) = <span class="fhi">${(w*user.x+b).toFixed(4)}</span></div>`);
+  lines.push(`<div class="fl">p = σ(z) = <span class="fhi">${p.toFixed(5)}</span>   f(x) = AmountMax×p = <span class="fhi">${f_x.toFixed(2)}</span></div>`);
+
+  if (currentMode === 'MAI') {
+    const err = p - 1;
+    lines.push(`<div class="fl fdim">──── MAI ────────────────────────────</div>`);
+    lines.push(`<div class="fl">error = p − 1 = ${err.toFixed(5)}</div>`);
+    lines.push(`<div class="fl">∇w = error × p(1−p) × x = <span class="fhi ${modeClass}">${gw.toExponential(4)}</span></div>`);
+  } else if (currentMode === 'AEO') {
+    const y = user.v > 0 ? 1 : 0;
+    lines.push(`<div class="fl fdim">──── AEO ────────────────────────────</div>`);
+    lines.push(`<div class="fl">y = ${y}  (v>0 → 1, else 0)</div>`);
+    lines.push(`<div class="fl">∇w = (p − y) × x = (${p.toFixed(4)} − ${y}) × ${user.x.toFixed(3)}</div>`);
+    lines.push(`<div class="fl">   = <span class="fhi ${modeClass}">${gw.toExponential(4)}</span></div>`);
+  } else {
+    const err = f_x - user.v;
+    lines.push(`<div class="fl fdim">──── VBO ────────────────────────────</div>`);
+    lines.push(`<div class="fl">error = f(x) − V_i = ${f_x.toFixed(1)} − ${user.v.toLocaleString()}</div>`);
+    lines.push(`<div class="fl">      = <span class="${isWhale?'fwhale':''}">${err.toFixed(1)}</span></div>`);
+    if (isWhale) {
+      const raw = whaleMult * user.v * err * p*(1-p) * user.x;
+      lines.push(`<div class="fl fwhale">∇w (×1e-9) = Mult × V_i × error × p(1−p) × x</div>`);
+      lines.push(`<div class="fl fwhale">  = ${whaleMult} × ${user.v.toLocaleString()} × ${err.toFixed(0)} × ${(p*(1-p)).toFixed(4)} × ${user.x.toFixed(3)}</div>`);
+      lines.push(`<div class="fl fwhale">  (raw) = ${raw.toExponential(3)}  →  (×1e-9) = ${gw.toExponential(4)}</div>`);
+    } else {
+      lines.push(`<div class="fl">∇w = Mult × V_i × err × p(1−p) × x × 1e-9 = <span class="fhi ${modeClass}">${gw.toExponential(4)}</span></div>`);
+    }
+  }
+  lines.push(`<div class="fl fdim">──────────────────────────────────────</div>`);
+  lines.push(`<div class="fl">w ← w − η·∇w = ${(w + lr*gw).toFixed(4)} − ${lr}×(${gw.toFixed(4)}) → <span class="fhi">${w.toFixed(4)}</span></div>`);
+
+  el.innerHTML = lines.join('');
+}
+
+// ─── Init ─────────────────────────────────────────────────────
+updateModeDesc();
+updateSliders();
+updateStats();
+drawLossLandscape();
+</script>
+</body>
+</html>
